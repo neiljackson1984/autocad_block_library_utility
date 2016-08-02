@@ -1,5 +1,5 @@
 ;(load "acaddoc.lsp")
-(load "variantArrayConversion.lsp")
+;(load "variantArrayConversion.lsp")
 
 (defun setAttribute
 	(
@@ -202,6 +202,9 @@
 		groups
 		blockDefinitions
 		currentSpace
+		currentLayer
+		currentLayerWasInitiallyLocked
+		currentLayerWasInitiallyFrozen
 	)
 	
 	(setq acadObj (vlax-get-acad-object))
@@ -236,10 +239,29 @@
 	(setvar "FILEDIA" 0)
 	(setvar "CMDECHO" 0)
 	
-	;;TO-DO: handle the case where the block definition does not yet exist.
+	(setq currentLayer
+		(vla-Item layers (getvar "CLAYER"))
+	)
+	(setq currentLayerWasInitiallyLocked (= (vla-get-Lock currentLayer) :vlax-true))
+	(setq currentLayerWasInitiallyFrozen (= (vla-get-Freeze currentLayer) :vlax-true))
+	
+	; (princ "\n")
+	; (princ "currentLayerWasInitiallyLocked: ")(princ currentLayerWasInitiallyLocked) (princ "\n")
+	; (princ "currentLayerWasInitiallyFrozen: ")(princ currentLayerWasInitiallyFrozen) (princ "\n")
+	
+	; unlock and unfreeze the current layer.
+	(if currentLayerWasInitiallyLocked
+		(vla-put-Lock currentLayer :vlax-false)
+	)
+	
+	(if currentLayerWasInitiallyFrozen
+		(vla-put-Freeze currentLayer :vlax-false)
+	)
+	
+	
+	;; TO-DO: handle the case where the block definition does not yet exist.
 	(vl-cmdf
 		"._-INSERT"
-		;;"autoscan_title_block_34x22=J:\\Keimig Associates\\1701_18th_ave\\blockDefinitions\\autoscan_title_block_34x22.dwg"
 		(strcat nameOfBlock "=" pathToFile)
 		;;"Yes" ;;yes, we do want to redefine. ;this was not necessary for some reason
 		"-10,-10,0"
@@ -253,12 +275,15 @@
 		(vlax-ename->vla-object (entlast))
 	)
 	
-	(vl-cmdf
-		"._ATTSYNC"
-		"Name"
-		nameOfBlock
+	; restore the initial lock and freeze state of the current layer.
+	(if currentLayerWasInitiallyLocked 
+		(vla-put-Lock currentLayer :vlax-true)
+	)
+	(if currentLayerWasInitiallyFrozen 
+		(vla-put-Freeze currentLayer :vlax-true)
 	)
 	
+	(attributeSync (vla-Item (vla-get-Blocks (vla-get-ActiveDocument (vlax-get-acad-object))) nameOfBlock) )
 	
 	(setvar "FILEDIA" originalFileDia)
 	(setvar "CMDECHO" originalCmdEcho)
@@ -275,7 +300,6 @@
 		destinationDatabase
 		file
 		absolutePathToFile
-		nameOfBlock
 		sourceDatabase
 		blockNamesToImport
 		blockDefinition
@@ -316,9 +340,12 @@
 				)
 			)
 			
-			(setq nameOfBlock (vl-filename-base absolutePathToFile))
-			;(reloadBlock nameOfBlock absolutePathToFile)
-			; TODO: attsync
+			(if importModelSpaceAsABlockDefinition
+				(progn
+					; this is a bit of a hack until I can get modelspace block importing figured out using the more elegant CopyObjects function.
+					(reloadBlock (vl-filename-base absolutePathToFile) absolutePathToFile)
+				)
+			)
 			
 			;=== IMPORT EVERY BLOCK DEFINITION WITHIN THE FILE AS A BLOCK DEFINITION
 			(setq sourceDatabase (LM:GetDocumentObject absolutePathToFile))
@@ -353,7 +380,6 @@
 				
 				(if (= blockName nameOfModelSpace)
 					(progn
-						(princ "checkpoint 1")
 						(setq blockName (vl-filename-base (vla-get-Name sourceDatabase)))
 						(vla-put-Name sourceBlockDefinition blockName) ; I  doubt that this will work -- we are attempting to rename modelspace, which I don't think acad will like.
 						(if (not (= (vla-get-Name sourceBlockDefinition) blockName))
