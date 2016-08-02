@@ -1,0 +1,38 @@
+(vlax-dump-object (vlax-ename->vla-object (ssname (ssget) 0)))
+
+(vla-put-Path (vlax-ename->vla-object (ssname (ssget) 0)) "x_titleBlock.dwg")
+
+(vla-put-Name (vlax-ename->vla-object (ssname (ssget) 0)) "itg_title_block")
+
+(vlax-for blockDefinition (vla-get-blocks (vla-get-ActiveDocument (vlax-get-acad-object)))
+	(princ (vla-get-Name blockDefinition))(princ "\n")
+)
+
+(vla-get-Name (vla-get-ModelSpace (vla-get-Document blockDefinition)))
+
+(vla-get-Name (vla-get-ModelSpace (vla-get-Document (vlax-ename->vla-object (ssname (ssget) 0)))))
+(vla-put-Name (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))) "this is my new name for modelspace")
+
+(vlax-dump-object (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))))
+
+(vla-get-hasAttributes (vlax-ename->vla-object (ssname (ssget) 0)))
+
+(type (vla-GetAttributes (vlax-ename->vla-object (ssname (ssget) 0))))
+(type (vlax-variant-value (vla-GetAttributes (vlax-ename->vla-object (ssname (ssget) 0)))))
+(vlax-safearray-get-dim (vlax-variant-value (vla-GetAttributes (vlax-ename->vla-object (ssname (ssget) 0)))))
+(vlax-safearray-get-l-bound (vlax-variant-value (vla-GetAttributes (vlax-ename->vla-object (ssname (ssget) 0)))) 1)
+(vlax-safearray-get-u-bound (vlax-variant-value (vla-GetAttributes (vlax-ename->vla-object (ssname (ssget) 0)))) 1)
+
+
+(princ "\n")
+(princ "model space is layout: ")
+(princ 
+	(vla-get-IsLayout (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))))
+)
+(princ "\n")
+(princ "model space is xref: ")
+(princ
+	(vla-get-IsXRef (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))))
+)
+(princ "\n")
+(princ)
