@@ -294,10 +294,12 @@
 
 (defun update_external_block_definitions
 	(	
+		destinationDatabase
+		blockDefinitionsDirectory
 		/
 		uniquifyingSuffix
-		blockDefinitionsDirectory
-		destinationDatabase
+		;blockDefinitionsDirectory
+		;destinationDatabase
 		file
 		absolutePathToFile
 		sourceDatabase
@@ -317,8 +319,8 @@
 	)
 	(setq nameOfModelSpace "*Model_Space")
 	(setq uniquifyingSuffix "asdfla234985723897154asd") ; we will append this suffix to produce a temporary name.
-	(setq blockDefinitionsDirectory (findfile "block_definitions")) ;  the directory containing dwg files, each of which shall be imported into this file as a block definition
-	(setq destinationDatabase (vla-get-ActiveDocument (vlax-get-acad-object))) ;;set the destinationDatabase to be the current document
+	;(setq blockDefinitionsDirectory (findfile "block_definitions")) ;  the directory containing dwg files, each of which shall be imported into this file as a block definition
+	;(setq destinationDatabase (vla-get-ActiveDocument (vlax-get-acad-object))) ;;set the destinationDatabase to be the current document
 	(if (vl-file-directory-p blockDefinitionsDirectory) 
 		(foreach file (vl-directory-files blockDefinitionsDirectory "*.dwg" 1) ; the '1' causes the function to list files only (not folders).
 			(setq absolutePathToFile (strcat blockDefinitionsDirectory "\\" file))
