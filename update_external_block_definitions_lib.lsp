@@ -409,6 +409,7 @@
 						)
 					)
 					(princ blockName)
+					(princ "\n")
 
 				)
 				
@@ -442,6 +443,7 @@
 						)
 					)
 				)
+				(princ "checkpoint 4\n")
 				; at this point, there will be no references pointing to the old block definition (because we have just re-pointed each
 				; of those references), so we may safely delete the old block definition.
 				(if destinationBlockDefinitionOld 
@@ -450,6 +452,7 @@
 						(vla-Delete destinationBlockDefinitionOld)
 					)
 				)
+				(princ "checkpoint 5\n")
 				(attributeSync destinationBlockDefinitionNew)
 				(princ "\n")
 			)
