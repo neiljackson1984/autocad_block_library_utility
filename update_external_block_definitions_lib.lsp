@@ -7,7 +7,6 @@
 		tag
 		newValue
 		/
-		theBlockReference
 		attributeReferences
 		theAttributeReference
 	)
@@ -291,36 +290,37 @@
 ;===========
 
 
-
 (defun update_external_block_definitions
 	(	
 		destinationDatabase
 		blockDefinitionsDirectory
 		/
-		uniquifyingSuffix
-		;blockDefinitionsDirectory
-		;destinationDatabase
-		file
+		; blockDefinitionsDirectory
+		; destinationDatabase
 		absolutePathToFile
-		sourceDatabase
-		blockNamesToImport
 		blockDefinition
+		blockDefinitionIsModelSpace
 		blockName
-		sourceBlockDefinition
-		destinationBlockDefinitionOld
-		tempBlockName
-		destinationBlockDefinitionNew
+		blockNamesToImport
 		container
+		destinationBlockDefinitionNew
+		destinationBlockDefinitionOld
 		entity
-		tabPrefix
+		file
 		importModelSpaceAsABlockDefinition
 		nameOfModelSpace
-		blockDefinitionIsModelSpace
+		sourceBlockDefinition
+		sourceDatabase
+		tabPrefix
+		tempBlockName
+		uniquifyingSuffix
 	)
 	(setq nameOfModelSpace "*Model_Space")
-	(setq uniquifyingSuffix "asdfla234985723897154asd") ; we will append this suffix to produce a temporary name.
+	; (setq uniquifyingSuffix "asdfla234985723897154asd") ; we will append this suffix to produce a temporary name.
+	(setq uniquifyingSuffix (strcat "temp_" (rtos (* 100000000 (getvar "cdate"))))) ; we will append this suffix to produce a temporary name.
 	;(setq blockDefinitionsDirectory (findfile "block_definitions")) ;  the directory containing dwg files, each of which shall be imported into this file as a block definition
 	;(setq destinationDatabase (vla-get-ActiveDocument (vlax-get-acad-object))) ;;set the destinationDatabase to be the current document
+	(princ "checkpoint 1")
 	(if (vl-file-directory-p blockDefinitionsDirectory) 
 		(foreach file (vl-directory-files blockDefinitionsDirectory "*.dwg" 1) ; the '1' causes the function to list files only (not folders).
 			(setq absolutePathToFile (strcat blockDefinitionsDirectory "\\" file))
@@ -375,9 +375,12 @@
 					)
 				)
 			)
+			
+			(princ "blockNamesToImport: ")(princ blockNamesToImport)(princ "\n")
 			;at this point, the only artifact of the model space importing flags that we care about is whether the name nameOfModelSpace is a member
 			; of blockNamesToImport.
 			(foreach blockName blockNamesToImport
+				(princ "now importing ")(princ blockName)(princ ".\n")
 				(setq sourceBlockDefinition (vla-Item (vla-get-blocks sourceDatabase) blockName))
 				
 				(if (= blockName nameOfModelSpace)
@@ -394,8 +397,9 @@
 				
 				(setq destinationBlockDefinitionOld (LM:getitem (vla-get-blocks destinationDatabase) blockName)) ;; this will be nil if there is no existing block definition of the specified name in the destination database. 
 				(setq tempBlockName (strcat blockName uniquifyingSuffix))
+				(princ "checkpoint2\n")
 				(if destinationBlockDefinitionOld (vla-put-Name destinationBlockDefinitionOld tempBlockName))
-				
+				(princ "checkpoint3\n")
 				(progn ; diagnostic message
 					(princ tabPrefix)
 					(princ 
