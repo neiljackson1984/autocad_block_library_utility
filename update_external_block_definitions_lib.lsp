@@ -7,6 +7,7 @@
 		tag
 		newValue
 		/
+		theBlockReference
 		attributeReferences
 		theAttributeReference
 	)
@@ -290,43 +291,36 @@
 ;===========
 
 
+
 (defun update_external_block_definitions
 	(	
 		destinationDatabase
 		blockDefinitionsDirectory
 		/
-		; blockDefinitionsDirectory
-		; destinationDatabase
-		absolutePathToFile
-		blockDefinition
-		blockDefinitionIsModelSpace
-		blockName
-		blockNamesToImport
-		container
-		destinationBlockDefinitionNew
-		destinationBlockDefinitionOld
-		entity
+		uniquifyingSuffix
+		;blockDefinitionsDirectory
+		;destinationDatabase
 		file
+		absolutePathToFile
+		sourceDatabase
+		blockNamesToImport
+		blockDefinition
+		blockName
+		sourceBlockDefinition
+		destinationBlockDefinitionOld
+		tempBlockName
+		destinationBlockDefinitionNew
+		container
+		entity
+		tabPrefix
 		importModelSpaceAsABlockDefinition
 		nameOfModelSpace
-		sourceBlockDefinition
-		sourceDatabase
-		tabPrefix
-		tempBlockName
-		uniquifyingSuffix
-		newlyImportedBlockDefinition
-		newlyImportedBlockDefinitions
-		blockDefinitionToBeReplaced
-		blockDefinitionsToBeReplaced
-		blockDefinitionToImport
-		blockDefinitionsToImport
+		blockDefinitionIsModelSpace
 	)
 	(setq nameOfModelSpace "*Model_Space")
-	; (setq uniquifyingSuffix "asdfla234985723897154asd") ; we will append this suffix to produce a temporary name.
-	(setq uniquifyingSuffix (strcat "temp_" (rtos (* 100000000 (getvar "cdate"))))) ; we will append this suffix to produce a temporary name.
+	(setq uniquifyingSuffix "asdfla234985723897154asd") ; we will append this suffix to produce a temporary name.
 	;(setq blockDefinitionsDirectory (findfile "block_definitions")) ;  the directory containing dwg files, each of which shall be imported into this file as a block definition
 	;(setq destinationDatabase (vla-get-ActiveDocument (vlax-get-acad-object))) ;;set the destinationDatabase to be the current document
-	(princ "checkpoint 1")
 	(if (vl-file-directory-p blockDefinitionsDirectory) 
 		(foreach file (vl-directory-files blockDefinitionsDirectory "*.dwg" 1) ; the '1' causes the function to list files only (not folders).
 			(setq absolutePathToFile (strcat blockDefinitionsDirectory "\\" file))
@@ -361,8 +355,6 @@
 			; collect a list of the names of block definitions to import.
 			(if (not sourceDatabase) (princ "Warning: source database could not be loaded."))
 			(setq blockNamesToImport (list))
-			(setq blockDefinitionsToImport (list))
-			
 			(vlax-for blockDefinition (vla-get-blocks sourceDatabase)
 				(setq blockDefinitionIsModelSpace (= (vla-get-Name blockDefinition) nameOfModelSpace))
 				(if
@@ -380,52 +372,46 @@
 					)
 					(progn
 						(setq blockNamesToImport (append blockNamesToImport (list (vla-get-name blockDefinition)))) ;;append the block name to blockNamesToImport
-						(setq blockDefinitionsToImport (append blockDefinitionsToImport (list blockDefinition))) ;;append the block definition to blockDefinitionsToImport
 					)
 				)
 			)
-			
-			(princ "blockNamesToImport: ")(princ blockNamesToImport)(princ "\n")
 			;at this point, the only artifact of the model space importing flags that we care about is whether the name nameOfModelSpace is a member
 			; of blockNamesToImport.
-			
-			; collect all the block definitions that we will end up replacing.  We will be deleting all these block definitions before exiting this function.
-			(setq blockDefinitionsToBeReplaced (list))
 			(foreach blockName blockNamesToImport
-				(setq blockDefinitionToBeReplaced (LM:getitem (vla-get-blocks destinationDatabase) blockName)) ;; this will be nil if there is no existing block definition of the specified name in the destination database. 
-				(if blockDefinitionToBeReplaced
+				(setq sourceBlockDefinition (vla-Item (vla-get-blocks sourceDatabase) blockName))
+				
+				(if (= blockName nameOfModelSpace)
 					(progn
-						(setq blockDefinitionsToBeReplaced (append blockDefinitionsToBeReplaced (list blockDefinitionToBeReplaced))) ;;append blockDefinitionToBeReplaced to blockDefinitionsToBeReplaced
-					)
-				)
-			)
-			(setq blockDefinitionToBeReplaced nil) ; helps the garbage collection
-			
-			
-			; rename all the source block definitions to a non-conflicting name
-			(setq uniqueSuffixForNew (strcat "_new_" uniquifyingSuffix))
-			(setq uniqueSuffixForOld (strcat "_old_" uniquifyingSuffix))
-			(foreach blockDefinition blockDefinitionsToImport
-				(setq newName (strcat (vla-get-Name blockDefinition) uniqueSuffixForNew))
-				(princ "renaming ")(princ (vla-get-Name blockDefinition))(princ " to ")(princ newName)
-				(vla-put-Name blockDefinition newName )
-				(princ "\t")(princ (vla-get-Name blockDefinition)) (princ "\n")
-			)
-			
-			
-			;; do the importing
-			(setq newlyImportedBlockDefinitions (list))
-			(foreach sourceBlockDefinition blockDefinitionsToImport
-				;compute blockName - the original name of the block definition before we appended the unique suffix.
-				(setq blockName 
-					(substr 
-						(vla-get-Name sourceBlockDefinition) ;string
-						1 ; index of the first character to return (the first character in the string has index 1)
-						(- (strlen (vla-get-Name sourceBlockDefinition)) (strlen uniqueSuffixForNew)) ; length (the number of characters to return)
+						(setq blockName (vl-filename-base (vla-get-Name sourceDatabase)))
+						(vla-put-Name sourceBlockDefinition blockName) ; I  doubt that this will work -- we are attempting to rename modelspace, which I don't think acad will like.
+						(if (not (= (vla-get-Name sourceBlockDefinition) blockName))
+							(progn
+								(princ "\n") (princ "attempting to rename modelSpace in source database failed.")(princ "\n")
+							)
+						)
 					)
 				)
 				
-				(princ "now importing ")(princ blockName)(princ ".\n")
+				(setq destinationBlockDefinitionOld (LM:getitem (vla-get-blocks destinationDatabase) blockName)) ;; this will be nil if there is no existing block definition of the specified name in the destination database. 
+				(setq tempBlockName (strcat blockName uniquifyingSuffix))
+				(if destinationBlockDefinitionOld (vla-put-Name destinationBlockDefinitionOld tempBlockName))
+				
+				(progn ; diagnostic message
+					(princ tabPrefix)
+					(princ 
+						(if destinationBlockDefinitionOld 
+							"importing (overwriting) :  "
+							"importing               :  "
+						)
+					)
+					(princ blockName)
+
+				)
+				
+				;; (vla-put-name sourceBlockDefinition tempBlockName)
+				;; I am going to use the tempName for the old destination block definition, instead of the sourceBlockDefinition.  Assigning the temp
+				;; name to the source definition can cause the temp names to persist after the import in cases where the block definitions in the source database
+				;; contain references to other block definitions in the source database.
 				
 				;perform the copying.
 				(vla-CopyObjects 
@@ -433,154 +419,35 @@
 					(gc:ObjectListToVariant (list sourceBlockDefinition))		; the list of objects to be copied
 					(vla-get-blocks destinationDatabase) 					; the owner to whom thses objects will be copied
 				)
-				(setq newlyImportedBlockDefinition (LM:getitem (vla-get-blocks destinationDatabase) (vla-get-Name sourceBlockDefinition)))
-				(if newlyImportedBlockDefinition
+				(setq destinationBlockDefinitionNew (LM:getitem (vla-get-blocks destinationDatabase) blockName))
+				;modify each reference that points to the old block definition to make it point to the new block definition
+				(if destinationBlockDefinitionOld 
 					(progn
-						(setq newlyImportedBlockDefinitions (append newlyImportedBlockDefinitions (list newlyImportedBlockDefinition))) 
-					)
-				)
-			)
-			
-			; modify block references that point to the old block definitions to point to the newly imported block definitions
-			(foreach newlyImportedBlockDefinition newlyImportedBlockDefinitions
-				(setq blockName 
-					(substr 
-						(vla-get-Name newlyImportedBlockDefinition) ;string
-						1 ; index of the first character to return (the first character in the string has index 1)
-						(- (strlen (vla-get-Name newlyImportedBlockDefinition)) (strlen uniqueSuffixForNew)) ; length (the number of characters to return)
-					)
-				)
-				(princ "repointing references to ")(princ blockName)(princ " to point to ")(princ (vla-get-Name newlyImportedBlockDefinition))(princ ".\n")
-				; find all references to the old block definition and modify so that the reference points to the new block definition.
-				(vlax-for container (vla-get-blocks destinationDatabase)
-					(vlax-for entity container
-						(if
-							(and
-								(= "AcDbBlockReference" (vla-get-ObjectName entity))
-								; (= (vla-get-Name entity) blockName)
-								(= (vla-get-EffectiveName entity) blockName)
-							)
-							(progn
-								(princ "found a reference to ")(princ blockName) (princ " in ")(vla-get-Name container)(princ ".\n")
-								(vla-put-Name entity (vla-get-Name newlyImportedBlockDefinition))
-								(princ "\t")(princ "after repointing, the reference points to ")(princ (vla-get-Name entity)) (princ ".\n")
-							)
-						)										
-					)	
-				)	
-			)
-			
-			;; delete the old block definitions, which have, presumably, now been replaced, and are no longer being referenced.
-			(foreach blockDefinition blockDefinitionsToBeReplaced
-				(if blockDefinition 
-					(progn 
-						(princ " deleting block definition " )(princ (vla-get-Name blockDefinition))(princ "\n")
-						(vla-Delete blockDefinition)
-					)
-				)
-			)
-			
-
-			;; restore the original names of the newlyImportedBlockDefintitions
-			(foreach newlyImportedBlockDefinition newlyImportedBlockDefinitions
-				(setq blockName 
-					(substr 
-						(vla-get-Name newlyImportedBlockDefinition) ;string
-						1 ; index of the first character to return (the first character in the string has index 1)
-						(- (strlen (vla-get-Name newlyImportedBlockDefinition)) (strlen uniqueSuffixForNew)) ; length (the number of characters to return)
-					)
-				)
-				
-				(vla-put-Name newlyImportedBlockDefinition blockName)
-			)
-			
-			;run attsync for each newlyImportedBlockDefinition
-			(foreach newlyImportedBlockDefinition newlyImportedBlockDefinitions
-				(attributeSync newlyImportedBlockDefinition)
-			)
-			
-			;;
-			
-			(if nil
-				(progn 
-					(foreach blockName blockNamesToImport
-						(princ "now importing ")(princ blockName)(princ ".\n")
-						(setq sourceBlockDefinition (vla-Item (vla-get-blocks sourceDatabase) blockName))
-						
-						(if (= blockName nameOfModelSpace)
-							(progn
-								(setq blockName (vl-filename-base (vla-get-Name sourceDatabase)))
-								(vla-put-Name sourceBlockDefinition blockName) ; I  doubt that this will work -- we are attempting to rename modelspace, which I don't think acad will like.
-								(if (not (= (vla-get-Name sourceBlockDefinition) blockName))
-									(progn
-										(princ "\n") (princ "attempting to rename modelSpace in source database failed.")(princ "\n")
+						(vlax-for container (vla-get-blocks destinationDatabase)
+							(vlax-for entity container
+								(if
+									(and
+										(= "AcDbBlockReference" (vla-get-ObjectName entity))
+										(= (vla-get-Name destinationBlockDefinitionOld) (vla-get-Name entity))
 									)
-								)
-							)
+									(progn
+										(vla-put-Name entity (vla-get-Name destinationBlockDefinitionNew))
+									)
+								)										
+							)	
 						)
-						
-						(setq destinationBlockDefinitionOld (LM:getitem (vla-get-blocks destinationDatabase) blockName)) ;; this will be nil if there is no existing block definition of the specified name in the destination database. 
-						(setq tempBlockName (strcat blockName uniquifyingSuffix))
-						(princ "checkpoint2\n")
-						(if destinationBlockDefinitionOld (vla-put-Name destinationBlockDefinitionOld tempBlockName))
-						(princ "checkpoint3\n")
-						(progn ; diagnostic message
-							(princ tabPrefix)
-							(princ 
-								(if destinationBlockDefinitionOld 
-									"importing (overwriting) :  "
-									"importing               :  "
-								)
-							)
-							(princ blockName)
-							(princ "\n")
-
-						)
-						
-						;; (vla-put-name sourceBlockDefinition tempBlockName)
-						;; I am going to use the tempName for the old destination block definition, instead of the sourceBlockDefinition.  Assigning the temp
-						;; name to the source definition can cause the temp names to persist after the import in cases where the block definitions in the source database
-						;; contain references to other block definitions in the source database.
-						
-						;perform the copying.
-						(vla-CopyObjects 
-							sourceDatabase 											; the database whose "CopyObjects" method we are calling (this is the database from which we are copying things)
-							(gc:ObjectListToVariant (list sourceBlockDefinition))		; the list of objects to be copied
-							(vla-get-blocks destinationDatabase) 					; the owner to whom thses objects will be copied
-						)
-						(setq destinationBlockDefinitionNew (LM:getitem (vla-get-blocks destinationDatabase) blockName))
-						;modify each reference that points to the old block definition to make it point to the new block definition
-						(if destinationBlockDefinitionOld 
-							(progn
-								(vlax-for container (vla-get-blocks destinationDatabase)
-									(vlax-for entity container
-										(if
-											(and
-												(= "AcDbBlockReference" (vla-get-ObjectName entity))
-												(= (vla-get-Name destinationBlockDefinitionOld) (vla-get-Name entity))
-											)
-											(progn
-												(vla-put-Name entity (vla-get-Name destinationBlockDefinitionNew))
-											)
-										)										
-									)	
-								)
-							)
-						)
-						(princ "checkpoint 4\n")
-						; at this point, there will be no references pointing to the old block definition (because we have just re-pointed each
-						; of those references), so we may safely delete the old block definition.
-						(if destinationBlockDefinitionOld 
-							(progn 
-								;(princ " deleting old block definition")
-								(vla-Delete destinationBlockDefinitionOld)
-							)
-						)
-						(princ "checkpoint 5\n")
-						(attributeSync destinationBlockDefinitionNew)
-						(princ "\n")
 					)
 				)
+				; at this point, there will be no references pointing to the old block definition (because we have just re-pointed each
+				; of those references), so we may safely delete the old block definition.
+				(if destinationBlockDefinitionOld 
+					(progn 
+						;(princ " deleting old block definition")
+						(vla-Delete destinationBlockDefinitionOld)
+					)
+				)
+				(attributeSync destinationBlockDefinitionNew)
+				(princ "\n")
 			)
 			(vlax-release-object sourceDatabase) ;this is probably not strictly necessary, because garbage collection would handle the closing of the source file even if I did not explicitly release the object.
 		)	
@@ -589,6 +456,20 @@
 )
 ;===========
 
+(defun c:update_external_block_definitions
+	( 
+		/
+		thisDocument
+		blockDefinitionsDirectory
+	)
+	(setq thisDocument (vla-get-ActiveDocument (vlax-get-acad-object)))
+	(setq blockDefinitionsDirectory (findfile "block_definitions"))
+	(update_external_block_definitions
+		thisDocument ; destinationDatabase
+		blockDefinitionsDirectory ; blockDefinitionsDirectory
+	)
+	(princ)
+)
 
 
 ;;; copied on 2016/01/17 from http://www.theswamp.org/index.php?topic=31674.5;wap2 
