@@ -291,6 +291,13 @@
 ;===========
 
 
+;; thanks to https://www.theswamp.org/index.php?topic=41820.0
+(defun GUID  (/ tl g)
+  (if (setq tl (vlax-get-or-create-object "Scriptlet.TypeLib"))
+    (progn (setq g (vlax-get tl 'Guid)) (vlax-release-object tl) (substr g 2 36)))
+)
+	
+
 
 (defun update_external_block_definitions
 	(	
@@ -318,7 +325,8 @@
 		blockDefinitionIsModelSpace
 	)
 	(setq nameOfModelSpace "*Model_Space")
-	(setq uniquifyingSuffix "asdfla234985723897154asd") ; we will append this suffix to produce a temporary name.
+	; (setq uniquifyingSuffix (GUID )) ; we will append this suffix to produce a temporary name.
+	(setq uniquifyingSuffix (rtos (getvar 'CDATE) )) ; we will append this suffix to produce a temporary name.
 	;(setq blockDefinitionsDirectory (findfile "block_definitions")) ;  the directory containing dwg files, each of which shall be imported into this file as a block definition
 	;(setq destinationDatabase (vla-get-ActiveDocument (vlax-get-acad-object))) ;;set the destinationDatabase to be the current document
 	(if (vl-file-directory-p blockDefinitionsDirectory) 
