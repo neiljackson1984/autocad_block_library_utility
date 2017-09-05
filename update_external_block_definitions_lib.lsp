@@ -459,14 +459,14 @@
 (defun c:update_external_block_definitions
 	( 
 		/
-		thisDocument
-		blockDefinitionsDirectory
+		_blockDefinitionsDirectory
 	)
-	(setq thisDocument (vla-get-ActiveDocument (vlax-get-acad-object)))
-	(setq blockDefinitionsDirectory (findfile "block_definitions"))
+	(setq _blockDefinitionsDirectory
+		(if blockDefinitionsDirectory blockDefinitionsDirectory (findfile "block_definitions"))
+	)
 	(update_external_block_definitions
-		thisDocument ; destinationDatabase
-		blockDefinitionsDirectory ; blockDefinitionsDirectory
+		(vla-get-ActiveDocument (vlax-get-acad-object)) ; destinationDatabase
+		_blockDefinitionsDirectory ; blockDefinitionsDirectory
 	)
 	(princ)
 )
