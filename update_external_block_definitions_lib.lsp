@@ -290,6 +290,38 @@
 )
 ;===========
 
+;;this function takes a string and returns a version of that string that is guaranteed not to have any characters that are illegal for autocad names.
+(defun sanitizeName (x /
+	illegalCharacters
+	replacementCharacters
+	sanitizedString
+	)
+	(setq illegalCharacters 
+		(list
+			"<"
+			">"
+			"/"
+			"\\"
+			"\""
+			":"
+			";"
+			"?"
+			"*"
+			"|"
+			","
+			"="
+			"`"
+		)
+	)
+	(setq replacementCharacters 
+		(mapcar '(lambda (x) "-")  illegalCharacters)
+	)
+	(setq sanitizedString 
+		(vl-string-translate (apply 'strcat illegalCharacters) (apply 'strcat replacementCharacters) x)
+	)
+	sanitizedString
+)
+
 
 ;; thanks to https://www.theswamp.org/index.php?topic=41820.0
 (defun GUID  (/ tl g)
@@ -326,7 +358,15 @@
 	)
 	(setq nameOfModelSpace "*Model_Space")
 	; (setq uniquifyingSuffix (GUID )) ; we will append this suffix to produce a temporary name.
-	(setq uniquifyingSuffix (rtos (getvar 'CDATE) )) ; we will append this suffix to produce a temporary name.
+	(setq uniquifyingSuffix 
+		(sanitizeName 
+			(rtos 
+				(* (getvar 'CDATE) (expt 10 7))
+				2 ;;mode (2 means decimal)
+				0 ;;precision (i.e. number of decimal places)
+			)
+		)
+	) ; we will append this suffix to produce a temporary name.  ;;it is important to specify the mode argument decimal in rtos because, if we happen to be in architectural number opmde, we could end up with quotes and apostrophes.
 
 	(if (vl-file-directory-p blockDefinitionsDirectory) 
 		(foreach file (vl-directory-files blockDefinitionsDirectory "*.dwg" 1) ; the '1' causes the function to list files only (not folders).
