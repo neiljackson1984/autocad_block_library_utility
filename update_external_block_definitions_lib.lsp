@@ -553,12 +553,15 @@
 						(vla-Delete destinationBlockDefinitionOld)
 					)
 				)
-				;(attributeSync destinationBlockDefinitionNew)
+				(attributeSync destinationBlockDefinitionNew)
 				(foreach attributeValueToRestore attributeValuesToRestore
 					(setq attributeReference (car attributeValueToRestore))
 					(setq goodValue (cdr attributeValueToRestore) )
+					
+					(princ "Re-asserting value of attributeReference: ")(princ goodValue)(princ "\n")
 					(vla-put-TextString attributeReference goodValue)
 				)
+				
 				(princ "\n")
 			)
 			(vlax-release-object sourceDatabase) ;this is probably not strictly necessary, because garbage collection would handle the closing of the source file even if I did not explicitly release the object.
