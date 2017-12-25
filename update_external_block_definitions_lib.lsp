@@ -521,8 +521,7 @@
 												;; (I suspect this problem is related to ATTSYNC not properly handling anonymous blocks)
 												
 												;;collect the attributeValues to be restored.
-												
-												(foreach attributeReference (gc:VariantToLispData (vla-GetAttributes myBlockReference))
+												(foreach attributeReference (gc:VariantToLispData (vla-GetAttributes blockReference))
 													(if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
 														(progn
 															(princ "recording attributeReference value: ")(princ code)(princ "\n")
