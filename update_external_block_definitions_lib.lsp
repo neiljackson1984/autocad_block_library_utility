@@ -70,6 +70,12 @@
 	)
 	(if blockDefinitionHasAttributes
 		(progn
+			
+			
+			;;there are cases where attsync will change the value of an attribute.  Specifically, it seems that when an attribute value contains field codes, ATTSYNC, has a tendency to set the value of that attribute to an empty string.
+			;; to work around this, we need to record the initial values of the attributes, and then reset them after the attsync.  STUPID!
+			
+			
 			(vl-cmdf
 				"._ATTSYNC"
 				"Name"
@@ -174,7 +180,7 @@
 
 ;; This function does not do anything with the nested blocks -- nested block references are not
 ;; relaced (although they should be)
-;; all of this is a work-around for xrefs not supporting attributes or dynamic properties -- irritating.insert
+;; all of this is a work-around for xrefs not supporting attributes or dynamic properties -- irritating.
 
 ;; VLA-Collection: Get Item  -  Lee Mac
 ;; Retrieves the item with index 'idx' if present in the supplied collection
@@ -336,25 +342,29 @@
 		destinationDatabase
 		blockDefinitionsDirectory
 		/
-		uniquifyingSuffix
-		;blockDefinitionsDirectory
-		;destinationDatabase
-		file
 		absolutePathToFile
-		sourceDatabase
-		blockNamesToImport
+		attributeReference
+		attributeValuesToRestore
+		attributeValueToRestore
 		blockDefinition
+		blockDefinitionIsModelSpace
 		blockName
-		sourceBlockDefinition
-		destinationBlockDefinitionOld
-		tempBlockName
-		destinationBlockDefinitionNew
+		blockNamesToImport
+		blockReference
 		container
+		destinationBlockDefinitionNew
+		destinationBlockDefinitionOld
+		dynamicProperties
 		entity
-		tabPrefix
+		file
+		goodValue
 		importModelSpaceAsABlockDefinition
 		nameOfModelSpace
-		blockDefinitionIsModelSpace
+		sourceBlockDefinition
+		sourceDatabase
+		tabPrefix
+		tempBlockName
+		uniquifyingSuffix
 	)
 	(setq nameOfModelSpace "*Model_Space")
 	; (setq uniquifyingSuffix (GUID )) ; we will append this suffix to produce a temporary name.
@@ -467,6 +477,7 @@
 				)
 				(setq destinationBlockDefinitionNew (LM:getitem (vla-get-blocks destinationDatabase) blockName))
 				;modify each reference that points to the old block definition to make it point to the new block definition
+				(setq attributeValuesToRestore (list )) ;; an associative list whose keys are attributeReference objects and whose values are the values that we want to set to the TextString property after performing ATTSYNC)
 				(if destinationBlockDefinitionOld 
 					(progn
 						(vlax-for container (vla-get-blocks destinationDatabase)
@@ -477,7 +488,58 @@
 										(= (vla-get-Name destinationBlockDefinitionOld) (vla-get-EffectiveName entity))
 									)
 									(progn
-										(vla-put-Name entity (vla-get-Name destinationBlockDefinitionNew))
+										(setq blockReference entity)
+										
+										
+										;; handle the case where the block is dynamic, in which case we need to take pains to ensure that the property values do not change.  
+										;; The property values are reset, by defalt, by calling (vla-put-Name ) onthe block reference.  This is undesirable behavior.
+										; (setq wasADynamicBlock (= (vla-get-IsDynamicBlock blockReference) :vlax-true))
+										(setq dynamicProperties  (LM:getdynprops blockReference)) ;;if the block reference is not dynamic, this simply returns nil - no exceptions are thrown so we don't need to bother checking whether the blockReference is dynamic.
+										(vla-put-Name blockReference (vla-get-Name destinationBlockDefinitionNew)) ;; point the block reference to the new block definition.
+										; (if (/= (= (vla-get-IsDynamicBlock blockReference) :vlax-true) wasADynamicBlock)
+											; (progn 
+												; (princ "\t\t\t")(princ "dynamicness changed from ")(princ wasADynamicBlock)(princ " to ")(princ (= (vla-get-IsDynamicBlock blockReference) :vlax-true)) (princ ".")(princ "\n")
+											; )
+										; )
+										
+										(if 
+											(and 
+												(> (length dynamicProperties) 0) 
+												(= (vla-get-IsDynamicBlock blockReference) :vlax-true)
+											) ;;we don't strictly need to do this check because none of the stuff that we do within this if statement would cause problems, even if the block were not dynamic.  
+											;; we perform the check simply to avoid the time penalty that the below actions incur when we don't truly need to do them.
+											(progn
+												(princ "\t\t\t")(princ "re-asserting dynamic properties: ")(princ dynamicProperties)(princ "\n")
+												;;(vla-Update blockReference) ;; it turns out that it is not necessary to invoke 'Update' before running LM:setdynprops.		
+												(LM:setdynprops blockReference dynamicProperties)
+												
+												;; for reasons I do not fully understand, the modification of DynamicBlockReferenceProperty::Value (which is what happens within LM:setdynprops) puts the 
+												;; block reference into a state where the next running of the ATTSYNC command on the corresponding block definition will cause any attribute references whose values
+												;; contain field codes to be set to an empty string.
+												;; to work around this problem, we, after running setdynprops but before we have run attsync, walk through the attributeReferences,
+												;; if any, and re-set the TextString property of each, using the LM:fieldcodes function to extract the 'real' field codes from the attribute Reference. 
+												;; (I suspect this problem is related to ATTSYNC not properly handling anonymous blocks)
+												
+												;;collect the attributeValues to be restored.
+												
+												(foreach attributeReference (gc:VariantToLispData (vla-GetAttributes myBlockReference))
+													(if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
+														(progn
+															(princ "recording attributeReference value: ")(princ code)(princ "\n")
+															;;(vla-put-TextString attributeReference code)
+															(appendTo 'attributeValuesToRestore 
+																(cons attributeReference code)
+															) 
+														)
+													)
+												)
+											)
+										)
+																		
+										; ;; I suspect that the above strategy of running LM:getdynprops before update and LM:setdynprops after update does not handle some cases of dynamic blocks (visibility parameters, for instance), but it is better than nothing for now.
+										; ;; TO DO: handle the  dynamic block issues that the above strategy does not handle.
+										
+										
 									)
 								)										
 							)	
@@ -492,7 +554,12 @@
 						(vla-Delete destinationBlockDefinitionOld)
 					)
 				)
-				(attributeSync destinationBlockDefinitionNew)
+				;(attributeSync destinationBlockDefinitionNew)
+				(foreach attributeValueToRestore attributeValuesToRestore
+					(setq attributeReference (car attributeValueToRestore))
+					(setq goodValue (cdr attributeValueToRestore) )
+					(vla-put-TextString attributeReference goodValue)
+				)
 				(princ "\n")
 			)
 			(vlax-release-object sourceDatabase) ;this is probably not strictly necessary, because garbage collection would handle the closing of the source file even if I did not explicitly release the object.
@@ -729,4 +796,379 @@
 (defun gc:SetXrecordData (xrec lst / xtyp xval)
   (gc:DxfListToVariants lst 'xtyp 'xval)
   (vla-SetXrecordData xrec xtyp xval)
+)
+
+;; Copied verbatim from http://www.lee-mac.com/dynamicblockfunctions.html 
+;;
+
+
+;; Get Dynamic Block Property Value  -  Lee Mac
+;; Returns the value of a Dynamic Block property (if present)
+;; blk - [vla] VLA Dynamic Block Reference object
+;; prp - [str] Dynamic Block property name (case-insensitive)
+
+(defun LM:getdynpropvalue ( blk prp )
+    (setq prp (strcase prp))
+    (vl-some '(lambda ( x ) (if (= prp (strcase (vla-get-propertyname x))) (vlax-get x 'value)))
+        (vlax-invoke blk 'getdynamicblockproperties)
+    )
+)
+
+
+
+
+
+
+
+
+
+
+
+
+;; Set Dynamic Block Property Value  -  Lee Mac
+;; Modifies the value of a Dynamic Block property (if present)
+;; blk - [vla] VLA Dynamic Block Reference object
+;; prp - [str] Dynamic Block property name (case-insensitive)
+;; val - [any] New value for property
+;; Returns: [any] New value if successful, else nil
+
+(defun LM:setdynpropvalue ( blk prp val )
+    (setq prp (strcase prp))
+    (vl-some
+       '(lambda ( x )
+            (if (= prp (strcase (vla-get-propertyname x)))
+                (progn
+                    (vla-put-value x (vlax-make-variant val (vlax-variant-type (vla-get-value x))))
+                    (cond (val) (t))
+                )
+            )
+        )
+        (vlax-invoke blk 'getdynamicblockproperties)
+    )
+)
+
+
+
+
+
+
+
+
+
+;; Get Dynamic Block Properties  -  Lee Mac
+;; Returns an association list of Dynamic Block properties & values.
+;; blk - [vla] VLA Dynamic Block Reference object
+;; Returns: [lst] Association list of ((<prop> . <value>) ... )
+
+(defun LM:getdynprops ( blk )
+    (mapcar '(lambda ( x ) (cons (vla-get-propertyname x) (vlax-get x 'value)))
+        (vlax-invoke blk 'getdynamicblockproperties)
+    )
+)
+
+
+
+
+
+
+
+
+;; Set Dynamic Block Properties  -  Lee Mac
+;; Modifies values of Dynamic Block properties using a supplied association list.
+;; blk - [vla] VLA Dynamic Block Reference object
+;; lst - [lst] Association list of ((<Property> . <Value>) ... )
+;; Returns: nil
+
+(defun LM:setdynprops ( blk lst / itm )
+    (setq lst (mapcar '(lambda ( x ) (cons (strcase (car x)) (cdr x))) lst))
+    (foreach x (vlax-invoke blk 'getdynamicblockproperties)
+        (if (setq itm (assoc (strcase (vla-get-propertyname x)) lst))
+            (vla-put-value x (vlax-make-variant (cdr itm) (vlax-variant-type (vla-get-value x))))
+        )
+    )
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;; Get Dynamic Block Property Allowed Values  -  Lee Mac
+;; Returns the allowed values for a specific Dynamic Block property.
+;; blk - [vla] VLA Dynamic Block Reference object
+;; prp - [str] Dynamic Block property name (case-insensitive)
+;; Returns: [lst] List of allowed values for property, else nil if no restrictions
+
+(defun LM:getdynpropallowedvalues ( blk prp )
+    (setq prp (strcase prp))
+    (vl-some '(lambda ( x ) (if (= prp (strcase (vla-get-propertyname x))) (vlax-get x 'allowedvalues)))
+        (vlax-invoke blk 'getdynamicblockproperties)
+    )
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;; Toggle Dynamic Block Flip State  -  Lee Mac
+;; Toggles the Flip parameter if present in a supplied Dynamic Block.
+;; blk - [vla] VLA Dynamic Block Reference object
+;; Return: [int] New Flip Parameter value
+
+(defun LM:toggleflipstate ( blk )
+    (vl-some
+       '(lambda ( prp / rtn )
+            (if (equal '(0 1) (vlax-get prp 'allowedvalues))
+                (progn
+                    (vla-put-value prp (vlax-make-variant (setq rtn (- 1 (vlax-get prp 'value))) vlax-vbinteger))
+                    rtn
+                )
+            )
+        )
+        (vlax-invoke blk 'getdynamicblockproperties)
+    )
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;; Get Visibility Parameter Name  -  Lee Mac
+;; Returns the name of the Visibility Parameter of a Dynamic Block (if present)
+;; blk - [vla] VLA Dynamic Block Reference object
+;; Returns: [str] Name of Visibility Parameter, else nil
+
+(defun LM:getvisibilityparametername ( blk / vis )  
+    (if
+        (and
+            (vlax-property-available-p blk 'effectivename)
+            (setq blk
+                (vla-item
+                    (vla-get-blocks (vla-get-document blk))
+                    (vla-get-effectivename blk)
+                )
+            )
+            (= :vlax-true (vla-get-isdynamicblock blk))
+            (= :vlax-true (vla-get-hasextensiondictionary blk))
+            (setq vis
+                (vl-some
+                   '(lambda ( pair )
+                        (if
+                            (and
+                                (= 360 (car pair))
+                                (= "BLOCKVISIBILITYPARAMETER" (cdr (assoc 0 (entget (cdr pair)))))
+                            )
+                            (cdr pair)
+                        )
+                    )
+                    (dictsearch
+                        (vlax-vla-object->ename (vla-getextensiondictionary blk))
+                        "ACAD_ENHANCEDBLOCK"
+                    )
+                )
+            )
+        )
+        (cdr (assoc 301 (entget vis)))
+    )
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+;; Get Dynamic Block Visibility State  -  Lee Mac
+;; Returns the value of the Visibility Parameter of a Dynamic Block (if present)
+;; blk - [vla] VLA Dynamic Block Reference object
+;; Returns: [str] Value of Visibility Parameter, else nil
+
+(defun LM:getvisibilitystate ( blk )
+    (LM:getdynpropvalue blk (LM:getvisibilityparametername blk))
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;; Set Dynamic Block Visibility State  -  Lee Mac
+;; Sets the Visibility Parameter of a Dynamic Block (if present) to a specific value (if allowed)
+;; blk - [vla] VLA Dynamic Block Reference object
+;; val - [str] Visibility State Parameter value
+;; Returns: [str] New value of Visibility Parameter, else nil
+
+(defun LM:SetVisibilityState ( blk val / vis )
+    (if
+        (and
+            (setq vis (LM:getvisibilityparametername blk))
+            (member (strcase val) (mapcar 'strcase (LM:getdynpropallowedvalues blk vis)))
+        )
+        (LM:setdynpropvalue blk vis val)
+    )
+)
+
+;; Field Code  -  Lee Mac
+;; Returns the field expression associated with an entity
+
+(defun LM:fieldcode ( ent / replacefield replaceobject fieldstring enx )
+
+    (defun replacefield ( str enx / ent fld pos )
+        (if (setq pos (vl-string-search "\\_FldIdx" (setq str (replaceobject str enx))))
+            (progn
+                (setq ent (assoc 360 enx)
+                      fld (entget (cdr ent))
+                )
+                (strcat
+                    (substr str 1 pos)
+                    (replacefield (fieldstring fld) fld)
+                    (replacefield (substr str (1+ (vl-string-search ">%" str pos))) (cdr (member ent enx)))
+                )
+            )
+            str
+        )
+    )
+
+    (defun replaceobject ( str enx / ent pos )
+        (if (setq pos (vl-string-search "ObjIdx" str))
+            (strcat
+                (substr str 1 (+ pos 5)) " "
+                (LM:ObjectID (vlax-ename->vla-object (cdr (setq ent (assoc 331 enx)))))
+                (replaceobject (substr str (1+ (vl-string-search ">%" str pos))) (cdr (member ent enx)))
+            )
+            str
+        )
+    )
+
+    (defun fieldstring ( enx / itm )
+        (if (setq itm (assoc 3 enx))
+            (strcat (cdr itm) (fieldstring (cdr (member itm enx))))
+            (cond ((cdr (assoc 2 enx))) (""))
+        )
+    )
+    
+    (if (and (wcmatch  (cdr (assoc 0 (setq enx (entget ent)))) "TEXT,MTEXT,ATTRIB,MULTILEADER,*DIMENSION")
+             (setq enx (cdr (assoc 360 enx)))
+             (setq enx (dictsearch enx "ACAD_FIELD"))
+             (setq enx (dictsearch (cdr (assoc -1 enx)) "TEXT"))
+        )
+        (replacefield (fieldstring enx) enx)
+    )
+)
+
+;; ObjectID  -  Lee Mac
+;; Returns a string containing the ObjectID of a supplied VLA-Object
+;; Compatible with 32-bit & 64-bit systems
+
+(defun LM:ObjectID ( obj )
+    (eval
+        (list 'defun 'LM:ObjectID '( obj )
+            (if
+                (and
+                    (vl-string-search "64" (getenv "PROCESSOR_ARCHITECTURE"))
+                    (vlax-method-applicable-p (vla-get-utility (LM:acdoc)) 'getobjectidstring)
+                )
+                (list 'vla-getobjectidstring (vla-get-utility (LM:acdoc)) 'obj ':vlax-false)
+               '(itoa (vla-get-objectid obj))
+            )
+        )
+    )
+    (LM:ObjectID obj)
+)
+
+;; Active Document  -  Lee Mac
+;; Returns the VLA Active Document Object
+
+(defun LM:acdoc nil
+    (eval (list 'defun 'LM:acdoc 'nil (vla-get-activedocument (vlax-get-acad-object))))
+    (LM:acdoc)
+)
+
+
+(defun appendTo 
+	(
+		theList
+		theElementToAppend
+		/
+		returnValue
+	)
+	(COND
+		(
+			(= (type theList) 'SYM)
+			(progn
+				(if (not (eval theList)) (set theList (list))) ; if theList is undefined, set it to an empty list (I realize that this is a tautology in lisp, since an undefined variabel has value nil, which is the same as an empty list. -- oh well)
+				(set theList
+					(append
+						(eval theList)
+						(list theElementToAppend)
+					)
+				)
+				(setq returnValue (eval theList))
+			)
+		)
+		(
+			(= (type theList) 'LIST)
+			(progn
+				(setq returnValue 						
+					(append
+						(eval theList)
+						(list theElementToAppend)
+					)
+				)
+			)
+		)
+	)
+	returnValue
 )
