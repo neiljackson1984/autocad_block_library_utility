@@ -365,6 +365,7 @@
 		tabPrefix
 		tempBlockName
 		uniquifyingSuffix
+		blockReferenceHasAttributes
 	)
 	(setq nameOfModelSpace "*Model_Space")
 	; (setq uniquifyingSuffix (GUID )) ; we will append this suffix to produce a temporary name.
@@ -512,7 +513,7 @@
 												(princ "\t\t\t")(princ "re-asserting dynamic properties: ")(princ dynamicProperties)(princ "\n")
 												;;(vla-Update blockReference) ;; it turns out that it is not necessary to invoke 'Update' before running LM:setdynprops.		
 												(LM:setdynprops blockReference dynamicProperties)
-												
+												(princ "checkpoint1\n")
 												;; for reasons I do not fully understand, the modification of DynamicBlockReferenceProperty::Value (which is what happens within LM:setdynprops) puts the 
 												;; block reference into a state where the next running of the ATTSYNC command on the corresponding block definition will cause any attribute references whose values
 												;; contain field codes to be set to an empty string.
@@ -521,17 +522,43 @@
 												;; (I suspect this problem is related to ATTSYNC not properly handling anonymous blocks)
 												
 												;;collect the attributeValues to be restored.
-												(foreach attributeReference (gc:VariantToLispData (vla-GetAttributes blockReference))
-													(if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
-														(progn
-															(princ "recording attributeReference value: ")(princ code)(princ "\n")
-															;;(vla-put-TextString attributeReference code)
-															(appendTo 'attributeValuesToRestore 
-																(cons attributeReference code)
-															) 
+												
+
+												;(setq blockReferenceHasAttributes (= (vla-get-HasAttributes entity) :vlax-true )) 
+												; unfortuntely, the HasAttributes property is not a reliable predictor of whether the block reference has attribute references (I think the value of hasAttributes gets set when the block refernce is first created and then persists even if the block is redefined to not have attrivute definitions and the attribute references are deleted).
+												; all of this rigamarrol could be fixed by modifying the gc:VariantToLispData function to be ablte
+												; to handle empty arrays (i.e. ubound < lbound), and return an empty list, rather than to throw an error as happens now.
+												
+												(setq blockReferenceHasAttributes
+													(and
+														(= (type (vla-GetAttributes blockReference)) 'VARIANT)
+														(= (type (vlax-variant-value (vla-GetAttributes blockReference))) 'SAFEARRAY)
+														(= (vlax-safearray-get-dim (vlax-variant-value (vla-GetAttributes blockReference))) 1)
+														(>= 
+															(vlax-safearray-get-u-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
+															(vlax-safearray-get-l-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
 														)
 													)
 												)
+												
+												(if blockReferenceHasAttributes
+													(progn
+														(foreach attributeReference (gc:VariantToLispData (vla-GetAttributes blockReference))
+															(princ "checkpoint1a\n")
+															(if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
+																(progn
+																	(princ "recording attributeReference value: ")(princ code)(princ "\n")
+																	;;(vla-put-TextString attributeReference code)
+																	(appendTo 'attributeValuesToRestore 
+																		(cons attributeReference code)
+																	) 
+																)
+															)
+														)
+													)
+												)
+
+												(princ "checkpoint2\n")
 											)
 										)
 																		
