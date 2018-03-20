@@ -465,6 +465,7 @@
 						)
 					)
 					(princ blockName)
+					(princ "\n")
 				)
 				
 				;; (vla-put-name sourceBlockDefinition tempBlockName)
@@ -495,7 +496,7 @@
 									)
 									(progn
 										(setq blockReference entity)
-										
+										; (princ "Found a blockReference, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document blockReference) (vla-get-OwnerID blockReference))))(princ ", pointing to the old definition of the block named ")(princ blockName)(princ ".\n")
 										
 										;; handle the case where the block is dynamic, in which case we need to take pains to ensure that the property values do not change.  
 										;; The property values are reset, by defalt, by calling (vla-put-Name ) onthe block reference.  This is undesirable behavior.
@@ -573,7 +574,7 @@
 									)
 								)
 
-								;; handle the case of an mleader pointing to the old block definition
+								;; handle the case of an mleader pointing to the old block definition  this case has to be handled spedially because an mleader using a block does not produce a blockReference.
 								(if
 									(and
 										(= "AcDbMLeader" (vla-get-ObjectName entity))
@@ -582,8 +583,8 @@
 										(= (vla-get-Name destinationBlockDefinitionOld) (vla-get-ContentBlockName  entity))
 									)
 									(progn
-										; (princ "Found an mleader pointing to the old definition of the block named ")(princ blockName)(princ "\n")
 										(setq mLeader entity)
+										; (princ "Found an mleader, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document mLeader) (vla-get-OwnerID mLeader))))	(princ ", pointing to the old definition of the block named ")(princ blockName)(princ "\n")
 										(vla-put-ContentBlockName mLeader blockName)
 									)
 								)
