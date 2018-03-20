@@ -366,6 +366,7 @@
 		tempBlockName
 		uniquifyingSuffix
 		blockReferenceHasAttributes
+		mLeader
 	)
 	(setq nameOfModelSpace "*Model_Space")
 	; (setq uniquifyingSuffix (GUID )) ; we will append this suffix to produce a temporary name.
@@ -413,6 +414,7 @@
 			; collect a list of the names of block definitions to import.
 			(if (not sourceDatabase) (princ "Warning: source database could not be loaded."))
 			(setq blockNamesToImport (list))
+			;collect a list of the names of the block definitions that we are to import from the source database.
 			(vlax-for blockDefinition (vla-get-blocks sourceDatabase)
 				(setq blockDefinitionIsModelSpace (= (vla-get-Name blockDefinition) nameOfModelSpace))
 				(if
@@ -483,6 +485,9 @@
 					(progn
 						(vlax-for container (vla-get-blocks destinationDatabase)
 							(vlax-for entity container
+								
+								
+								;; handle the case of a block reference pointing to the old block definition
 								(if
 									(and
 										(= "AcDbBlockReference" (vla-get-ObjectName entity))
@@ -544,7 +549,6 @@
 												(if blockReferenceHasAttributes
 													(progn
 														(foreach attributeReference (gc:VariantToLispData (vla-GetAttributes blockReference))
-															(princ "checkpoint1a\n")
 															(if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
 																(progn
 																	(princ "recording attributeReference value: ")(princ code)(princ "\n")
@@ -558,7 +562,7 @@
 													)
 												)
 
-												(princ "checkpoint2\n")
+												
 											)
 										)
 																		
@@ -567,7 +571,23 @@
 										
 										
 									)
-								)										
+								)
+
+								;; handle the case of an mleader pointing to the old block definition
+								(if
+									(and
+										(= "AcDbMLeader" (vla-get-ObjectName entity))
+										(= (vla-get-ContentType entity) acBlockContent)
+										(= (vla-get-ContentBlockType entity) acBlockUserDefined)
+										(= (vla-get-Name destinationBlockDefinitionOld) (vla-get-ContentBlockName  entity))
+									)
+									(progn
+										; (princ "Found an mleader pointing to the old definition of the block named ")(princ blockName)(princ "\n")
+										(setq mLeader entity)
+										(vla-put-ContentBlockName mLeader blockName)
+									)
+								)
+								
 							)	
 						)
 					)
