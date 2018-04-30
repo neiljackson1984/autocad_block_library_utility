@@ -480,6 +480,8 @@
 					(vla-get-blocks destinationDatabase) 					; the owner to whom thses objects will be copied
 				)
 				(setq destinationBlockDefinitionNew (LM:getitem (vla-get-blocks destinationDatabase) blockName))
+				
+				; scan through all entities in all blockDefinitions looking for refererences to our block definition (these can be in the form of block references, mleaders, or tables.
 				;modify each reference that points to the old block definition to make it point to the new block definition
 				(setq attributeValuesToRestore (list )) ;; an associative list whose keys are attributeReference objects and whose values are the values that we want to set to the TextString property after performing ATTSYNC)
 				(if destinationBlockDefinitionOld 
@@ -586,6 +588,20 @@
 										(setq mLeader entity)
 										; (princ "Found an mleader, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document mLeader) (vla-get-OwnerID mLeader))))	(princ ", pointing to the old definition of the block named ")(princ blockName)(princ "\n")
 										(vla-put-ContentBlockName mLeader blockName)
+									)
+								)
+								
+								
+								;; handle the case of a table having one or more cells that have one or more content items referring to the block.  Much like the mLeader case, this case has to be handled spedially because tbale cell content item using a block does not produce a blockReference.
+								(if
+									(and
+										(= "AcDbTable" (vla-get-ObjectName entity))
+									)
+									(progn
+										;scan through all content items of all cells of table, looking for a content item that points to our block definition.
+										; for each match that we find, repoint the content item to the new block definition.
+										;; TO DO: fill me in.
+										
 									)
 								)
 								
