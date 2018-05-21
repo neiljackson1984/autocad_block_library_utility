@@ -39,4 +39,6 @@
 
 
 (vla-Item (vla-get-Layers (vla-get-ActiveDocument (vlax-get-acad-object))) (getvar "CLAYER"))
-(vlax-dump-object (vla-Item (vla-get-Layers (vla-get-ActiveDocument (vlax-get-acad-object))) (getvar "CLAYER")))
+(vlax-dump-object (vla-Item (vla-get-Layers (vla-get-ActiveDocument (vlax-get-acad-object))) (getvar "CLAYER")))0
+
+(vlax-dump-object (vlax-ename->vla-object (car (entsel))))
