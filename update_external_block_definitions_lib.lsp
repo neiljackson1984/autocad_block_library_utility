@@ -759,6 +759,16 @@
 								
 							)	
 						)
+                        
+                        ;;TO DO: handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
+                        ;; unfortunately, this will be difficult because I cannot figure out how to work with the templateTable in the same way as a regular table.
+                        (if nil (progn ;;TO DO 
+                            
+                            ;;handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
+                            (vlax-for tableStyle (vla-item (vla-get-Dictionaries destinationDatabase) "ACAD_TABLESTYLE")
+                                
+                            )
+                        ))
 					)
 				)
 				; at this point, there will be no references pointing to the old block definition (because we have just re-pointed each
@@ -1390,3 +1400,4 @@
 	)
 	returnValue
 )
+(princ)
