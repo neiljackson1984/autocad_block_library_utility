@@ -366,6 +366,7 @@
 		blockDefinitionIsModelSpace
 		blockName
 		blockNamesToImport
+        blockDefinitionsToImport
 		blockReference
 		container
 		destinationBlockDefinitionNew
@@ -392,6 +393,7 @@
 		initialAttribute
 		attributeDefinition
 		initialCellState
+        temporaryNameMap
 	)
 	(setq nameOfModelSpace "*Model_Space")
 	; (setq uniquifyingSuffix (GUID )) ; we will append this suffix to produce a temporary name.
@@ -405,6 +407,8 @@
 		)
 	) ; we will append this suffix to produce a temporary name.  ;;it is important to specify the mode argument decimal in rtos because, if we happen to be in architectural number opmde, we could end up with quotes and apostrophes.
 
+    
+    
 	(if (vl-file-directory-p blockDefinitionsDirectory) 
 		(foreach file (vl-directory-files blockDefinitionsDirectory "*.dwg" 1) ; the '1' causes the function to list files only (not folders).
 			(setq absolutePathToFile (strcat blockDefinitionsDirectory "\\" file))
@@ -439,6 +443,7 @@
 			; collect a list of the names of block definitions to import.
 			(if (not sourceDatabase) (princ "Warning: source database could not be loaded."))
 			(setq blockNamesToImport (list))
+			(setq blockDefinitionsToImport (list))
 			;collect a list of the names of the block definitions that we are to import from the source database.
 			(vlax-for blockDefinition (vla-get-blocks sourceDatabase)
 				(setq blockDefinitionIsModelSpace (= (vla-get-Name blockDefinition) nameOfModelSpace))
@@ -457,342 +462,673 @@
 					)
 					(progn
 						(setq blockNamesToImport (append blockNamesToImport (list (vla-get-name blockDefinition)))) ;;append the block name to blockNamesToImport
+						(setq blockDefinitionsToImport (append blockDefinitionsToImport (list blockDefinition))) ;;append the block definition to blockDefinitionsToImport
 					)
 				)
 			)
 			;at this point, the only artifact of the model space importing flags that we care about is whether the name nameOfModelSpace is a member
 			; of blockNamesToImport.
-			(foreach blockName blockNamesToImport
-				(setq sourceBlockDefinition (vla-Item (vla-get-blocks sourceDatabase) blockName))
-				
-				(if (= blockName nameOfModelSpace)
-					(progn
-						(setq blockName (vl-filename-base (vla-get-Name sourceDatabase)))
-						(vla-put-Name sourceBlockDefinition blockName) ; I  doubt that this will work -- we are attempting to rename modelspace, which I don't think acad will like.
-						(if (not (= (vla-get-Name sourceBlockDefinition) blockName))
-							(progn
-								(princ "\n") (princ "attempting to rename modelSpace in source database failed.")(princ "\n")
-							)
-						)
-					)
-				)
-				
-				(setq destinationBlockDefinitionOld (LM:getitem (vla-get-blocks destinationDatabase) blockName)) ;; this will be nil if there is no existing block definition of the specified name in the destination database. 
-				(setq tempBlockName (strcat blockName uniquifyingSuffix))
-				(if destinationBlockDefinitionOld (vla-put-Name destinationBlockDefinitionOld tempBlockName))
-				
-				(progn ; diagnostic message
-					(princ tabPrefix)
-					(princ 
-						(if destinationBlockDefinitionOld 
-							"importing (overwriting) :  "
-							"importing               :  "
-						)
-					)
-					(princ blockName)
-					(princ "\n")
-				)
-				
-				;; (vla-put-name sourceBlockDefinition tempBlockName)
-				;; I am going to use the tempName for the old destination block definition, instead of the sourceBlockDefinition.  Assigning the temp
-				;; name to the source definition can cause the temp names to persist after the import in cases where the block definitions in the source database
-				;; contain references to other block definitions in the source database.
-				
-				;perform the copying.
-				(vla-CopyObjects 
-					sourceDatabase 											; the database whose "CopyObjects" method we are calling (this is the database from which we are copying things)
-					(gc:ObjectListToVariant (list sourceBlockDefinition))		; the list of objects to be copied
-					(vla-get-blocks destinationDatabase) 					; the owner to whom thses objects will be copied
-				)
-				(setq destinationBlockDefinitionNew (LM:getitem (vla-get-blocks destinationDatabase) blockName))
-				;modify each reference that points to the old block definition to make it point to the new block definition
-				(setq attributeValuesToRestore (list )) ;; an associative list whose keys are attributeReference objects and whose values are the values that we want to set to the TextString property after performing ATTSYNC)
+            (setq blockReplacementSpecs (list)) ;;a list of maps, each representing one replacement of a block definition. (this will store things like the temporary names and original names). (really just stores context between passes through the blockDefinitionsToImport.
+            ;; SWEEP THROUGH blockDefinitionsToImport: rename existing blocks as needed so that when we perform the import, none of the existing blocks in the destination database will have any names matching the names of the blocks to be imported.
+            (foreach sourceBlockDefinition blockDefinitionsToImport
+                (setq destinationBlockDefinitionOld (LM:getitem (vla-get-blocks destinationDatabase) (vla-get-name sourceBlockDefinition))) ;; this will be nil if there is no existing block definition of the same name as sourceBlockDefinition
 				(if destinationBlockDefinitionOld 
-					(progn
-						(vlax-for container (vla-get-blocks destinationDatabase)
-							(vlax-for entity container
-								
-								
-								;; handle the case of a block reference pointing to the old block definition
-								(if
-									(and
-										(= "AcDbBlockReference" (vla-get-ObjectName entity))
-										(= (vla-get-Name destinationBlockDefinitionOld) (vla-get-EffectiveName entity))
-									)
-									(progn
-										(setq blockReference entity)
-										; (princ "Found a blockReference, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document blockReference) (vla-get-OwnerID blockReference))))(princ ", pointing to the old definition of the block named ")(princ blockName)(princ ".\n")
-										
-										;; handle the case where the block is dynamic, in which case we need to take pains to ensure that the property values do not change.  
-										;; The property values are reset, by defalt, by calling (vla-put-Name ) onthe block reference.  This is undesirable behavior.
-										; (setq wasADynamicBlock (= (vla-get-IsDynamicBlock blockReference) :vlax-true))
-										(setq dynamicProperties  (LM:getdynprops blockReference)) ;;if the block reference is not dynamic, this simply returns nil - no exceptions are thrown so we don't need to bother checking whether the blockReference is dynamic.
-										(vla-put-Name blockReference (vla-get-Name destinationBlockDefinitionNew)) ;; point the block reference to the new block definition.
-										; (if (/= (= (vla-get-IsDynamicBlock blockReference) :vlax-true) wasADynamicBlock)
-											; (progn 
-												; (princ "\t\t\t")(princ "dynamicness changed from ")(princ wasADynamicBlock)(princ " to ")(princ (= (vla-get-IsDynamicBlock blockReference) :vlax-true)) (princ ".")(princ "\n")
-											; )
-										; )
-										
-										(if 
-											(and 
-												(> (length dynamicProperties) 0) 
-												(= (vla-get-IsDynamicBlock blockReference) :vlax-true)
-											) ;;we don't strictly need to do this check because none of the stuff that we do within this if statement would cause problems, even if the block were not dynamic.  
-											;; we perform the check simply to avoid the time penalty that the below actions incur when we don't truly need to do them.
-											(progn
-												(princ "\t\t\t")(princ "re-asserting dynamic properties: ")(princ dynamicProperties)(princ "\n")
-												;;(vla-Update blockReference) ;; it turns out that it is not necessary to invoke 'Update' before running LM:setdynprops.		
-												(LM:setdynprops blockReference dynamicProperties)
-												(princ "checkpoint1\n")
-												;; for reasons I do not fully understand, the modification of DynamicBlockReferenceProperty::Value (which is what happens within LM:setdynprops) puts the 
-												;; block reference into a state where the next running of the ATTSYNC command on the corresponding block definition will cause any attribute references whose values
-												;; contain field codes to be set to an empty string.
-												;; to work around this problem, we, after running setdynprops but before we have run attsync, walk through the attributeReferences,
-												;; if any, and re-set the TextString property of each, using the LM:fieldcodes function to extract the 'real' field codes from the attribute Reference. 
-												;; (I suspect this problem is related to ATTSYNC not properly handling anonymous blocks)
-												
-												;;collect the attributeValues to be restored.
-												
-
-												;(setq blockReferenceHasAttributes (= (vla-get-HasAttributes entity) :vlax-true )) 
-												; unfortuntely, the HasAttributes property is not a reliable predictor of whether the block reference has attribute references (I think the value of hasAttributes gets set when the block refernce is first created and then persists even if the block is redefined to not have attrivute definitions and the attribute references are deleted).
-												; all of this rigamarrol could be fixed by modifying the gc:VariantToLispData function to be ablte
-												; to handle empty arrays (i.e. ubound < lbound), and return an empty list, rather than to throw an error as happens now.
-												
-												(setq blockReferenceHasAttributes
-													(and
-														(= (type (vla-GetAttributes blockReference)) 'VARIANT)
-														(= (type (vlax-variant-value (vla-GetAttributes blockReference))) 'SAFEARRAY)
-														(= (vlax-safearray-get-dim (vlax-variant-value (vla-GetAttributes blockReference))) 1)
-														(>= 
-															(vlax-safearray-get-u-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
-															(vlax-safearray-get-l-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
-														)
-													)
-												)
-												
-												(if blockReferenceHasAttributes
-													(progn
-														(foreach attributeReference (gc:VariantToLispData (vla-GetAttributes blockReference))
-															(if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
-																(progn
-																	(princ "recording attributeReference value: ")(princ code)(princ "\n")
-																	;;(vla-put-TextString attributeReference code)
-																	(appendTo 'attributeValuesToRestore 
-																		(cons attributeReference code)
-																	) 
-																)
-															)
-														)
-													)
-												)
-
-												
-											)
-										)
-																		
-										; ;; I suspect that the above strategy of running LM:getdynprops before update and LM:setdynprops after update does not handle some cases of dynamic blocks (visibility parameters, for instance), but it is better than nothing for now.
-										; ;; TO DO: handle the  dynamic block issues that the above strategy does not handle.
-										
-										
-									)
-								)
-
-								;; handle the case of an mleader pointing to the old block definition  this case has to be handled specially because an mleader using a block does not produce a blockReference.
-								(if
-									(and
-										(= "AcDbMLeader" (vla-get-ObjectName entity))
-										(= (vla-get-ContentType entity) acBlockContent)
-										(= (vla-get-ContentBlockType entity) acBlockUserDefined)
-										(= (vla-get-Name destinationBlockDefinitionOld) (vla-get-ContentBlockName  entity))
-									)
-									(progn
-										(setq mLeader entity)
-										; (princ "Found an mleader, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document mLeader) (vla-get-OwnerID mLeader))))	(princ ", pointing to the old definition of the block named ")(princ blockName)(princ "\n")
-										(vla-put-ContentBlockName mLeader blockName)
-									)
-								)
-								
-								;; handle the case of a table cell containing a block reference.  For some incrompehensible reason, a table cell containing a block does not create a block reference; the system for table cells usig blocks is independent of the usual blockReference system.
-								(if
-									(and
-										(= "AcDbTable" (vla-get-ObjectName entity))
-									)
-									(progn
-										(setq theTable entity)
-										;; search through all the content items to see if any of them is a block-containing content item
-										(foreach rowIndex (range (vla-get-rows theTable))
-											; (princ "row ") (princ rowIndex)(princ ":")(princ "\n")
-											; (princ "\t")(princ "(vla-GetRowType theTable rowIndex): ")(princ (cdr (assoc (vla-GetRowType theTable rowIndex) AcRowType_enumValues)))(princ "\n")
-
-											; (princ "\t")(princ "cells: ")(princ "\n")
-											(foreach columnIndex (range (vla-get-columns theTable))
-												; (princ "\t\t")(princ "cell ")(princ "(")(princ rowIndex)(princ " ")(princ columnIndex)(princ ")")(princ ": ")                                                                               (princ "\n")												
-												; step through all content items in this cell.
-												(setq contentIndex 0)
-												(while 
-													(not
-														;; the below expression is a test for the content item being non-existent.
-														(and
-															(= (vlax-variant-type (vla-GetValue theTable rowIndex columnIndex contentIndex)) vlax-vbEmpty)
-															; vla-GetValue will return an empty variant in the case where the content item does not exist, 
-															; but it also returns an empty variant in the case of a non-existent content item.  Fortunately, 
-															; a non-existent content item will have, characteristically, GetValue being vlax-vbEmpty and 
-															; GetBlockTableRecordId2 being zero.
-															(= (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex) 0	)
-														)
-													)
-													
-													(if  ; if this content item contains a block reference pointing to our block definition...
-														(and
-															(/= 0 (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex))
-															(= 
-																(vla-get-Name 
-																	(vla-ObjectIDToObject (vla-get-Document theTable) 
-																		(vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex)
-																	)
-																) 
-																(vla-get-Name destinationBlockDefinitionOld) 
-															)
-														)
-														(progn
-														
-															(princ 
-																(strcat
-																	"Found a reference to the block definition " blockName " at "
-																	(vla-get-name container) "/" 
-																	(vla-get-Handle theTable) "(table)" 
-																	"/"
-																	"row" (itoa rowIndex) "," "column" (itoa columnIndex) "," "content" (itoa contentIndex) 
-																	"."
-																	"\n"
-																)
-															)
-															
-															;;record the initial state of the cell's content-locked flag, so that we can restore it when we are done (we will be temporarily turning off content lock while we do the work).
-															(setq initialCellState (vla-GetCellState theTable rowIndex columnIndex))
-															
-															; invoke SetCellState to ensure that the content is not locked.  (If the conent is locked when we try to change the content bleow, an exception is thrown.
-															(vla-SetCellState theTable rowIndex columnIndex acCellStateNone) 
-															
-																
-															
-															
-															;; deal with attribute values.  Is it possible that we can get away without explicitly dealing with atttribute values? 
-															; Curiously, we seemed to be able to get away without thinking about attribute values in the case of an Mleader referring to a block 
-															; definition; However, in the case of a table content item referring to a block definition, if we don't do anything about attribute values,
-															; then all the attribute values get reset to defaults when we re-point the content item to point to the new block definition.
-															;populate initialAttributes, a set of name value pairs.
-															; Unfortunately, we cannot use the same procedure that we used in the case of regular block references, because block references in a table cell are not ture blockReference objects and do not have true attributeReference objects.
-															(setq initialAttributes (list))
-															(vlax-for e destinationBlockDefinitionOld
-																(if 
-																	(= (vla-get-ObjectName e) "AcDbAttributeDefinition")
-																	(progn
-																		(setq attributeDefinition e)
-																		(setq initialAttributes
-																			(append
-																				initialAttributes
-																				(list
-																					(list
-																						(cons "name" (vla-get-TagString attributeDefinition))
-																						(cons "value" 
-																							(vla-GetBlockAttributeValue2 theTable rowIndex columnIndex contentIndex
-																								(vla-get-ObjectID attributeDefinition)
-																							)
-																						)
-																					)
-																				)
-																			)
-																		)
-																	)
-																)
-															)
-															(princ "initialAttributes: ")(princ initialAttributes)(princ "\n")
-															
-
-															(vla-SetBlockTableRecordId2 theTable 
-																rowIndex columnIndex contentIndex
-																(vla-get-ObjectID destinationBlockDefinitionNew)
-																(vla-GetAutoScale2 theTable rowIndex columnIndex contentIndex)
-															)
-															
-															;; re-apply the attribute values
-															(foreach initialAttribute initialAttributes
-															
-																; find the attributeDefinition within the new blockDefinition that has the proper TagString
-																(setq attributeDefinition nil)
-																(vlax-for e destinationBlockDefinitionNew
-																	(if 
-																		(and
-																			(not attributeDefinition)
-																			(= (vla-get-ObjectName e) "AcDbAttributeDefinition")
-																			(= (vla-get-TagString e) (cdr (assoc "name" initialAttribute)))
-																		)
-																		(progn
-																			(setq attributeDefinition e)
-																		)
-																	)
-																)
-																
-																(if attributeDefinition
-																	(progn
-																		(vla-SetBlockAttributeValue2 theTable rowIndex columnIndex contentIndex
-																			(vla-get-ObjectID attributeDefinition)
-																			(cdr (assoc "value" initialAttribute))
-																		)
-																	)
-																)
-															)
-															
-															;;restore the original content/formatting locking state, which we might have changed above in order to ensure that the content was unlocked.
-															(vla-SetCellState theTable rowIndex columnIndex initialCellState) 
-														)
-													)
-													(setq contentIndex (1+ contentIndex))
-												)
-											)
-										)
-									)
-								)
-								
-							)	
-						)
-                        
-                        ;;TO DO: handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
-                        ;; unfortunately, this will be difficult because I cannot figure out how to work with the templateTable in the same way as a regular table.
-                        (if nil (progn ;;TO DO 
-                            
-                            ;;handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
-                            (vlax-for tableStyle (vla-item (vla-get-Dictionaries destinationDatabase) "ACAD_TABLESTYLE")
-                                
+                    (progn
+                        (setq blockReplacementSpecs 
+                            (append blockReplacementSpecs 
+                                (list 
+                                    (list   
+                                        (cons "blockName"                       (vla-get-Name sourceBlockDefinition)   )
+                                        (cons "sourceBlockDefinition"            sourceBlockDefinition                 )
+                                        (cons "destinationBlockDefinitionOld"    destinationBlockDefinitionOld         )
+                                    )
+                                )
                             )
-                        ))
-					)
-				)
-				; at this point, there will be no references pointing to the old block definition (because we have just re-pointed each
+                        )
+                        (vla-put-Name destinationBlockDefinitionOld (strcat (vla-get-Name destinationBlockDefinitionOld) uniquifyingSuffix))
+                    )
+                )
+            )
+            
+            (princ "\tcommencing CopyObjects\n")
+            ;; copy all blockDefinitionsToImport into the destinationDatabase
+            (if blockDefinitionsToImport
+                (progn
+                    (vla-CopyObjects 
+                        sourceDatabase 											; the database whose "CopyObjects" method we are calling (this is the database from which we are copying things)
+                        (gc:ObjectListToVariant blockDefinitionsToImport)		; the list of objects to be copied
+                        (vla-get-blocks destinationDatabase) 					; the owner to whom thses objects will be copied
+                    )
+                )
+            )
+            (princ "\tfinished CopyObjects\n")
+            ;; SWEEP through blockReplacementSpecs, repoint references to the old block definition to point to the new block definition
+            (foreach blockReplacementSpec blockReplacementSpecs
+                (setq blockName  (cdr (assoc "blockName" blockReplacementSpec)))
+                (setq destinationBlockDefinitionNew (LM:getitem (vla-get-blocks destinationDatabase)  blockName)   )
+                (setq destinationBlockDefinitionOld  (cdr (assoc "destinationBlockDefinitionOld" blockReplacementSpec)))
+                (princ (strcat "\t\t" "searching for existing references to " blockName "." "\n") )
+               
+                (vlax-for container (vla-get-blocks destinationDatabase)
+                    (vlax-for entity container
+                        ;; handle the case of a block reference pointing to the old block definition
+                        (if
+                            (and
+                                (= "AcDbBlockReference" (vla-get-ObjectName entity))
+                                (= (vla-get-Name destinationBlockDefinitionOld) (vla-get-EffectiveName entity))
+                            )
+                            (progn
+                                (setq blockReference entity)
+                                (princ "\t\t\t" )(princ "Found a blockReference, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document blockReference) (vla-get-OwnerID blockReference))))(princ ", pointing to the old definition of the block named ")(princ blockName)(princ ".\n")
+                                ;; handle the case where the block is dynamic, in which case we need to take pains to ensure that the property values do not change.  
+                                ;; The property values are reset, by defalt, by calling (vla-put-Name ) onthe block reference.  This is undesirable behavior.
+                                (setq dynamicProperties   (LM:getdynprops blockReference))
+                                
+                                ;; when a dynamic linear dimension paramter (and possibly other types of dynamic dimension parameters) is present: for some reason, 
+                                ;; the list returned by LM:getdynprops contains an element like ("Origin" . (list a b)), where a and b are numbers (the coordinates of one end of the linear dimension).  there is one of these "Origin" elements for each dynamic linear dimension.
+                                ;; This causes problems when we go to re-assert the dynamic properties, because (LM:setdynprops ) does not know how to cast a list of 2 numbers to a variant suitable for setting as the value of a dynamic block property reference object.
+                                ;; Therefore, we will remove these "Origin" elements from the list.
+                                (setq dynamicProperties  
+                                    (vl-remove-if
+                                        '(lambda (x) 
+                                            (and
+                                                (= (car x) "Origin")
+                                                (= (length (cdr x)) 2)
+                                            )
+                                        )
+                                        dynamicProperties
+                                    )
+                                ) ;;if the block reference is not dynamic, this simply returns nil - no exceptions are thrown so we don't need to bother checking whether the blockReference is dynamic.
+                                
+                                
+                                (vla-put-Name blockReference (vla-get-Name destinationBlockDefinitionNew)) ;; point the block reference to the new block definition.
+                                (setq attributeValuesToRestore (list )) ;; an associative list whose keys are attributeReference objects and whose values are the values that we want to set to the TextString property after performing ATTSYNC)
+                                (if ;; if the blockreference is a dynamic block reference with dynamic properties...
+                                    (and 
+                                        (> (length dynamicProperties) 0) 
+                                        (= (vla-get-IsDynamicBlock blockReference) :vlax-true)
+                                    ) ;;we don't strictly need to do this check because none of the stuff that we do within this if statement would cause problems, even if the block were not dynamic.  
+                                    ;; we perform the check simply to avoid the time penalty that the below actions incur when we don't truly need to do them.
+                                    (progn
+                                        (princ "\t\t\t")(princ "re-asserting dynamic properties: ")(princ dynamicProperties)(princ "\n")
+                                        ;;(vla-Update blockReference) ;; it turns out that it is not necessary to invoke 'Update' before running LM:setdynprops.		
+                                        (LM:setdynprops blockReference dynamicProperties)
+                                        ;; for reasons I do not fully understand, the modification of DynamicBlockReferenceProperty::Value (which is what happens within LM:setdynprops) puts the 
+                                        ;; block reference into a state where the next running of the ATTSYNC command on the corresponding block definition will cause any attribute references whose values
+                                        ;; contain field codes to be set to an empty string.
+                                        ;; to work around this problem, we, after running setdynprops but before we have run attsync, walk through the attributeReferences,
+                                        ;; if any, and re-set the TextString property of each, using the LM:fieldcodes function to extract the 'real' field codes from the attribute Reference. 
+                                        ;; (I suspect this problem is related to ATTSYNC not properly handling anonymous blocks)
+                                        
+                                        ;;collect the attributeValues to be restored.
+                                        ;(setq blockReferenceHasAttributes (= (vla-get-HasAttributes entity) :vlax-true )) 
+                                        ; unfortuntely, the HasAttributes property is not a reliable predictor of whether the block reference has attribute references (I think the value of hasAttributes gets set when the block refernce is first created and then persists even if the block is redefined to not have attrivute definitions and the attribute references are deleted).
+                                        ; all of this rigamarrol could be fixed by modifying the gc:VariantToLispData function to be ablte
+                                        ; to handle empty arrays (i.e. ubound < lbound), and return an empty list, rather than to throw an error as happens now.
+                                        
+                                        (setq blockReferenceHasAttributes
+                                            (and
+                                                (= (type (vla-GetAttributes blockReference)) 'VARIANT)
+                                                (= (type (vlax-variant-value (vla-GetAttributes blockReference))) 'SAFEARRAY)
+                                                (= (vlax-safearray-get-dim (vlax-variant-value (vla-GetAttributes blockReference))) 1)
+                                                (>= 
+                                                    (vlax-safearray-get-u-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
+                                                    (vlax-safearray-get-l-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
+                                                )
+                                            )
+                                        )
+                                        
+                                        (if blockReferenceHasAttributes
+                                            (progn
+                                                (foreach attributeReference (gc:VariantToLispData (vla-GetAttributes blockReference))
+                                                    (if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
+                                                        (progn
+                                                            (princ "recording attributeReference value: ")(princ code)(princ "\n")
+                                                            ;;(vla-put-TextString attributeReference code)
+                                                            (appendTo 'attributeValuesToRestore 
+                                                                (cons attributeReference code)
+                                                            ) 
+                                                        )
+                                                    )
+                                                )
+                                            )
+                                        )   
+                                    )
+                                )
+                                                                
+                                ; ;; I suspect that the above strategy of running LM:getdynprops before update and LM:setdynprops after update does not handle some cases of dynamic blocks (visibility parameters, for instance), but it is better than nothing for now.
+                                ; ;; TO DO: handle the  dynamic block issues that the above strategy does not handle. 
+                            )
+                        )
+
+                        ;; handle the case of an mleader pointing to the old block definition  this case has to be handled specially because an mleader using a block does not produce a blockReference.
+                        (if
+                            (and
+                                (= "AcDbMLeader" (vla-get-ObjectName entity))
+                                (= (vla-get-ContentType entity) acBlockContent)
+                                (= (vla-get-ContentBlockType entity) acBlockUserDefined)
+                                (= (vla-get-Name destinationBlockDefinitionOld) (vla-get-ContentBlockName  entity))
+                            )
+                            (progn
+                                (setq mLeader entity)
+                                ; (princ "Found an mleader, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document mLeader) (vla-get-OwnerID mLeader))))	(princ ", pointing to the old definition of the block named ")(princ blockName)(princ "\n")
+                                (vla-put-ContentBlockName mLeader blockName)
+                            )
+                        )
+                        
+                        ;; handle the case of a table cell containing a block reference.  For some incrompehensible reason, a table cell containing a block does not create a block reference; the system for table cells usig blocks is independent of the usual blockReference system.
+                        (if
+                            (and
+                                (= "AcDbTable" (vla-get-ObjectName entity))
+                            )
+                            (progn
+                                (setq theTable entity)
+                                ;; search through all the content items to see if any of them is a block-containing content item
+                                (foreach rowIndex (range (vla-get-rows theTable))
+                                    ; (princ "row ") (princ rowIndex)(princ ":")(princ "\n")
+                                    ; (princ "\t")(princ "(vla-GetRowType theTable rowIndex): ")(princ (cdr (assoc (vla-GetRowType theTable rowIndex) AcRowType_enumValues)))(princ "\n")
+
+                                    ; (princ "\t")(princ "cells: ")(princ "\n")
+                                    (foreach columnIndex (range (vla-get-columns theTable))
+                                        ; (princ "\t\t")(princ "cell ")(princ "(")(princ rowIndex)(princ " ")(princ columnIndex)(princ ")")(princ ": ")                                                                               (princ "\n")												
+                                        ; step through all content items in this cell.
+                                        (setq contentIndex 0)
+                                        (while 
+                                            (not
+                                                ;; the below expression is a test for the content item being non-existent.
+                                                (and
+                                                    (= (vlax-variant-type (vla-GetValue theTable rowIndex columnIndex contentIndex)) vlax-vbEmpty)
+                                                    ; vla-GetValue will return an empty variant in the case where the content item does not exist, 
+                                                    ; but it also returns an empty variant in the case of a non-existent content item.  Fortunately, 
+                                                    ; a non-existent content item will have, characteristically, GetValue being vlax-vbEmpty and 
+                                                    ; GetBlockTableRecordId2 being zero.
+                                                    (= (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex) 0	)
+                                                )
+                                            )
+                                            
+                                            (if  ; if this content item contains a block reference pointing to our block definition...
+                                                (and
+                                                    (/= 0 (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex))
+                                                    (= 
+                                                        (vla-get-Name 
+                                                            (vla-ObjectIDToObject (vla-get-Document theTable) 
+                                                                (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex)
+                                                            )
+                                                        ) 
+                                                        (vla-get-Name destinationBlockDefinitionOld) 
+                                                    )
+                                                )
+                                                (progn
+                                                
+                                                    (princ 
+                                                        (strcat
+                                                            "Found a reference to the block definition " blockName " at "
+                                                            (vla-get-name container) "/" 
+                                                            (vla-get-Handle theTable) "(table)" 
+                                                            "/"
+                                                            "row" (itoa rowIndex) "," "column" (itoa columnIndex) "," "content" (itoa contentIndex) 
+                                                            "."
+                                                            "\n"
+                                                        )
+                                                    )
+                                                    
+                                                    ;;record the initial state of the cell's content-locked flag, so that we can restore it when we are done (we will be temporarily turning off content lock while we do the work).
+                                                    (setq initialCellState (vla-GetCellState theTable rowIndex columnIndex))
+                                                    
+                                                    ; invoke SetCellState to ensure that the content is not locked.  (If the conent is locked when we try to change the content bleow, an exception is thrown.
+                                                    (vla-SetCellState theTable rowIndex columnIndex acCellStateNone) 
+                                                    
+                                                        
+                                                    
+                                                    
+                                                    ;; deal with attribute values.  Is it possible that we can get away without explicitly dealing with atttribute values? 
+                                                    ; Curiously, we seemed to be able to get away without thinking about attribute values in the case of an Mleader referring to a block 
+                                                    ; definition; However, in the case of a table content item referring to a block definition, if we don't do anything about attribute values,
+                                                    ; then all the attribute values get reset to defaults when we re-point the content item to point to the new block definition.
+                                                    ;populate initialAttributes, a set of name value pairs.
+                                                    ; Unfortunately, we cannot use the same procedure that we used in the case of regular block references, because block references in a table cell are not ture blockReference objects and do not have true attributeReference objects.
+                                                    (setq initialAttributes (list))
+                                                    (vlax-for e destinationBlockDefinitionOld
+                                                        (if 
+                                                            (= (vla-get-ObjectName e) "AcDbAttributeDefinition")
+                                                            (progn
+                                                                (setq attributeDefinition e)
+                                                                (setq initialAttributes
+                                                                    (append
+                                                                        initialAttributes
+                                                                        (list
+                                                                            (list
+                                                                                (cons "name" (vla-get-TagString attributeDefinition))
+                                                                                (cons "value" 
+                                                                                    (vla-GetBlockAttributeValue2 theTable rowIndex columnIndex contentIndex
+                                                                                        (vla-get-ObjectID attributeDefinition)
+                                                                                    )
+                                                                                )
+                                                                            )
+                                                                        )
+                                                                    )
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+                                                    (princ "initialAttributes: ")(princ initialAttributes)(princ "\n")
+                                                    
+
+                                                    (vla-SetBlockTableRecordId2 theTable 
+                                                        rowIndex columnIndex contentIndex
+                                                        (vla-get-ObjectID destinationBlockDefinitionNew)
+                                                        (vla-GetAutoScale2 theTable rowIndex columnIndex contentIndex)
+                                                    )
+                                                    
+                                                    ;; re-apply the attribute values
+                                                    (foreach initialAttribute initialAttributes
+                                                    
+                                                        ; find the attributeDefinition within the new blockDefinition that has the proper TagString
+                                                        (setq attributeDefinition nil)
+                                                        (vlax-for e destinationBlockDefinitionNew
+                                                            (if 
+                                                                (and
+                                                                    (not attributeDefinition)
+                                                                    (= (vla-get-ObjectName e) "AcDbAttributeDefinition")
+                                                                    (= (vla-get-TagString e) (cdr (assoc "name" initialAttribute)))
+                                                                )
+                                                                (progn
+                                                                    (setq attributeDefinition e)
+                                                                )
+                                                            )
+                                                        )
+                                                        
+                                                        (if attributeDefinition
+                                                            (progn
+                                                                (vla-SetBlockAttributeValue2 theTable rowIndex columnIndex contentIndex
+                                                                    (vla-get-ObjectID attributeDefinition)
+                                                                    (cdr (assoc "value" initialAttribute))
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+                                                    
+                                                    ;;restore the original content/formatting locking state, which we might have changed above in order to ensure that the content was unlocked.
+                                                    (vla-SetCellState theTable rowIndex columnIndex initialCellState) 
+                                                )
+                                            )
+                                            (setq contentIndex (1+ contentIndex))
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                        
+                    )	
+                )
+                
+                ;;TO DO: handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
+                ;; unfortunately, this will be difficult because I cannot figure out how to work with the templateTable in the same way as a regular table.
+                (if nil (progn ;;TO DO 
+                    
+                    ;;handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
+                    (vlax-for tableStyle (vla-item (vla-get-Dictionaries destinationDatabase) "ACAD_TABLESTYLE")
+                        
+                    )
+                ))
+                
+                ; at this point, there will be no references pointing to the old block definition (because we have just re-pointed each
 				; of those references), so we may safely delete the old block definition.
-				(if destinationBlockDefinitionOld 
-					(progn 
-						;(princ " deleting old block definition")
-						(vla-Delete destinationBlockDefinitionOld)
-					)
-				)
+				(vla-Delete destinationBlockDefinitionOld)
+                
 				(attributeSync destinationBlockDefinitionNew)
+                (princ "\n")
 				(foreach attributeValueToRestore attributeValuesToRestore
 					(setq attributeReference (car attributeValueToRestore))
 					(setq goodValue (cdr attributeValueToRestore) )
-					
 					(princ "Re-asserting value of attributeReference: ")(princ goodValue)(princ "\n")
 					(vla-put-TextString attributeReference goodValue)
 				)
-				
-				(princ "\n")
-			)
-			(vlax-release-object sourceDatabase) ;this is probably not strictly necessary, because garbage collection would handle the closing of the source file even if I did not explicitly release the object.
-		)	
+                
+                
+            )
+            
+            ;; The following nilled-out section is the leftover from before refactoring to import all blockDefinitionsToBeImported in a single call to CopyObjects.
+            (if nil
+                (progn
+                    (foreach blockName blockNamesToImport
+                        (setq sourceBlockDefinition (vla-Item (vla-get-blocks sourceDatabase) blockName))
+                        
+                        (if (= blockName nameOfModelSpace)
+                            (progn
+                                (setq blockName (vl-filename-base (vla-get-Name sourceDatabase)))
+                                (vla-put-Name sourceBlockDefinition blockName) ; I  doubt that this will work -- we are attempting to rename modelspace, which I don't think acad will like.
+                                (if (not (= (vla-get-Name sourceBlockDefinition) blockName))
+                                    (progn
+                                        (princ "\n") (princ "attempting to rename modelSpace in source database failed.")(princ "\n")
+                                    )
+                                )
+                            )
+                        )
+                        
+                        (setq destinationBlockDefinitionOld (LM:getitem (vla-get-blocks destinationDatabase) blockName)) ;; this will be nil if there is no existing block definition of the specified name in the destination database. 
+                        (setq tempBlockName (strcat blockName uniquifyingSuffix))
+                        (if destinationBlockDefinitionOld (vla-put-Name destinationBlockDefinitionOld tempBlockName))
+                        
+                        (progn ; diagnostic message
+                            (princ tabPrefix)
+                            (princ 
+                                (if destinationBlockDefinitionOld 
+                                    "importing (overwriting) :  "
+                                    "importing               :  "
+                                )
+                            )
+                            (princ blockName)
+                            (princ "\n")
+                        )
+                        
+                        ;; (vla-put-name sourceBlockDefinition tempBlockName)
+                        ;; I am going to use the tempName for the old destination block definition, instead of the sourceBlockDefinition.  Assigning the temp
+                        ;; name to the source definition can cause the temp names to persist after the import in cases where the block definitions in the source database
+                        ;; contain references to other block definitions in the source database.
+                        
+                        ;perform the copying.
+                        (vla-CopyObjects 
+                            sourceDatabase 											; the database whose "CopyObjects" method we are calling (this is the database from which we are copying things)
+                            (gc:ObjectListToVariant (list sourceBlockDefinition))		; the list of objects to be copied
+                            (vla-get-blocks destinationDatabase) 					; the owner to whom thses objects will be copied
+                        )
+                        (setq destinationBlockDefinitionNew (LM:getitem (vla-get-blocks destinationDatabase) blockName))
+                        ;modify each reference that points to the old block definition to make it point to the new block definition
+                        (setq attributeValuesToRestore (list )) ;; an associative list whose keys are attributeReference objects and whose values are the values that we want to set to the TextString property after performing ATTSYNC)
+                        (if destinationBlockDefinitionOld 
+                            (progn
+                                (vlax-for container (vla-get-blocks destinationDatabase)
+                                    (vlax-for entity container
+                                        
+                                        
+                                        ;; handle the case of a block reference pointing to the old block definition
+                                        (if
+                                            (and
+                                                (= "AcDbBlockReference" (vla-get-ObjectName entity))
+                                                (= (vla-get-Name destinationBlockDefinitionOld) (vla-get-EffectiveName entity))
+                                            )
+                                            (progn
+                                                (setq blockReference entity)
+                                                ; (princ "Found a blockReference, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document blockReference) (vla-get-OwnerID blockReference))))(princ ", pointing to the old definition of the block named ")(princ blockName)(princ ".\n")
+                                                
+                                                ;; handle the case where the block is dynamic, in which case we need to take pains to ensure that the property values do not change.  
+                                                ;; The property values are reset, by defalt, by calling (vla-put-Name ) onthe block reference.  This is undesirable behavior.
+                                                ; (setq wasADynamicBlock (= (vla-get-IsDynamicBlock blockReference) :vlax-true))
+                                                (setq dynamicProperties  (LM:getdynprops blockReference)) ;;if the block reference is not dynamic, this simply returns nil - no exceptions are thrown so we don't need to bother checking whether the blockReference is dynamic.
+                                                (vla-put-Name blockReference (vla-get-Name destinationBlockDefinitionNew)) ;; point the block reference to the new block definition.
+                                                ; (if (/= (= (vla-get-IsDynamicBlock blockReference) :vlax-true) wasADynamicBlock)
+                                                    ; (progn 
+                                                        ; (princ "\t\t\t")(princ "dynamicness changed from ")(princ wasADynamicBlock)(princ " to ")(princ (= (vla-get-IsDynamicBlock blockReference) :vlax-true)) (princ ".")(princ "\n")
+                                                    ; )
+                                                ; )
+                                                
+                                                (if 
+                                                    (and 
+                                                        (> (length dynamicProperties) 0) 
+                                                        (= (vla-get-IsDynamicBlock blockReference) :vlax-true)
+                                                    ) ;;we don't strictly need to do this check because none of the stuff that we do within this if statement would cause problems, even if the block were not dynamic.  
+                                                    ;; we perform the check simply to avoid the time penalty that the below actions incur when we don't truly need to do them.
+                                                    (progn
+                                                        (princ "\t\t\t")(princ "re-asserting dynamic properties: ")(princ dynamicProperties)(princ "\n")
+                                                        ;;(vla-Update blockReference) ;; it turns out that it is not necessary to invoke 'Update' before running LM:setdynprops.		
+                                                        (LM:setdynprops blockReference dynamicProperties)
+                                                        (princ "checkpoint1\n")
+                                                        ;; for reasons I do not fully understand, the modification of DynamicBlockReferenceProperty::Value (which is what happens within LM:setdynprops) puts the 
+                                                        ;; block reference into a state where the next running of the ATTSYNC command on the corresponding block definition will cause any attribute references whose values
+                                                        ;; contain field codes to be set to an empty string.
+                                                        ;; to work around this problem, we, after running setdynprops but before we have run attsync, walk through the attributeReferences,
+                                                        ;; if any, and re-set the TextString property of each, using the LM:fieldcodes function to extract the 'real' field codes from the attribute Reference. 
+                                                        ;; (I suspect this problem is related to ATTSYNC not properly handling anonymous blocks)
+                                                        
+                                                        ;;collect the attributeValues to be restored.
+                                                        
+
+                                                        ;(setq blockReferenceHasAttributes (= (vla-get-HasAttributes entity) :vlax-true )) 
+                                                        ; unfortuntely, the HasAttributes property is not a reliable predictor of whether the block reference has attribute references (I think the value of hasAttributes gets set when the block refernce is first created and then persists even if the block is redefined to not have attrivute definitions and the attribute references are deleted).
+                                                        ; all of this rigamarrol could be fixed by modifying the gc:VariantToLispData function to be ablte
+                                                        ; to handle empty arrays (i.e. ubound < lbound), and return an empty list, rather than to throw an error as happens now.
+                                                        
+                                                        (setq blockReferenceHasAttributes
+                                                            (and
+                                                                (= (type (vla-GetAttributes blockReference)) 'VARIANT)
+                                                                (= (type (vlax-variant-value (vla-GetAttributes blockReference))) 'SAFEARRAY)
+                                                                (= (vlax-safearray-get-dim (vlax-variant-value (vla-GetAttributes blockReference))) 1)
+                                                                (>= 
+                                                                    (vlax-safearray-get-u-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
+                                                                    (vlax-safearray-get-l-bound (vlax-variant-value (vla-GetAttributes blockReference)) 1)
+                                                                )
+                                                            )
+                                                        )
+                                                        
+                                                        (if blockReferenceHasAttributes
+                                                            (progn
+                                                                (foreach attributeReference (gc:VariantToLispData (vla-GetAttributes blockReference))
+                                                                    (if (setq code (LM:fieldcode (vlax-vla-object->ename attributeReference))) ;;LM:fieldcode returns nil if the attributeReference value contains no field codes, and otherwise returns the entire value of the attributeReference, including the field codes (and, of course, mtext formatting codes, which are indepenedent from field codes.)
+                                                                        (progn
+                                                                            (princ "recording attributeReference value: ")(princ code)(princ "\n")
+                                                                            ;;(vla-put-TextString attributeReference code)
+                                                                            (appendTo 'attributeValuesToRestore 
+                                                                                (cons attributeReference code)
+                                                                            ) 
+                                                                        )
+                                                                    )
+                                                                )
+                                                            )
+                                                        )
+
+                                                        
+                                                    )
+                                                )
+                                                                                
+                                                ; ;; I suspect that the above strategy of running LM:getdynprops before update and LM:setdynprops after update does not handle some cases of dynamic blocks (visibility parameters, for instance), but it is better than nothing for now.
+                                                ; ;; TO DO: handle the  dynamic block issues that the above strategy does not handle.
+                                                
+                                                
+                                            )
+                                        )
+
+                                        ;; handle the case of an mleader pointing to the old block definition  this case has to be handled specially because an mleader using a block does not produce a blockReference.
+                                        (if
+                                            (and
+                                                (= "AcDbMLeader" (vla-get-ObjectName entity))
+                                                (= (vla-get-ContentType entity) acBlockContent)
+                                                (= (vla-get-ContentBlockType entity) acBlockUserDefined)
+                                                (= (vla-get-Name destinationBlockDefinitionOld) (vla-get-ContentBlockName  entity))
+                                            )
+                                            (progn
+                                                (setq mLeader entity)
+                                                ; (princ "Found an mleader, owned by ")(princ (vla-get-name (vla-ObjectIDToObject (vla-get-Document mLeader) (vla-get-OwnerID mLeader))))	(princ ", pointing to the old definition of the block named ")(princ blockName)(princ "\n")
+                                                (vla-put-ContentBlockName mLeader blockName)
+                                            )
+                                        )
+                                        
+                                        ;; handle the case of a table cell containing a block reference.  For some incrompehensible reason, a table cell containing a block does not create a block reference; the system for table cells usig blocks is independent of the usual blockReference system.
+                                        (if
+                                            (and
+                                                (= "AcDbTable" (vla-get-ObjectName entity))
+                                            )
+                                            (progn
+                                                (setq theTable entity)
+                                                ;; search through all the content items to see if any of them is a block-containing content item
+                                                (foreach rowIndex (range (vla-get-rows theTable))
+                                                    ; (princ "row ") (princ rowIndex)(princ ":")(princ "\n")
+                                                    ; (princ "\t")(princ "(vla-GetRowType theTable rowIndex): ")(princ (cdr (assoc (vla-GetRowType theTable rowIndex) AcRowType_enumValues)))(princ "\n")
+
+                                                    ; (princ "\t")(princ "cells: ")(princ "\n")
+                                                    (foreach columnIndex (range (vla-get-columns theTable))
+                                                        ; (princ "\t\t")(princ "cell ")(princ "(")(princ rowIndex)(princ " ")(princ columnIndex)(princ ")")(princ ": ")                                                                               (princ "\n")												
+                                                        ; step through all content items in this cell.
+                                                        (setq contentIndex 0)
+                                                        (while 
+                                                            (not
+                                                                ;; the below expression is a test for the content item being non-existent.
+                                                                (and
+                                                                    (= (vlax-variant-type (vla-GetValue theTable rowIndex columnIndex contentIndex)) vlax-vbEmpty)
+                                                                    ; vla-GetValue will return an empty variant in the case where the content item does not exist, 
+                                                                    ; but it also returns an empty variant in the case of a non-existent content item.  Fortunately, 
+                                                                    ; a non-existent content item will have, characteristically, GetValue being vlax-vbEmpty and 
+                                                                    ; GetBlockTableRecordId2 being zero.
+                                                                    (= (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex) 0	)
+                                                                )
+                                                            )
+                                                            
+                                                            (if  ; if this content item contains a block reference pointing to our block definition...
+                                                                (and
+                                                                    (/= 0 (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex))
+                                                                    (= 
+                                                                        (vla-get-Name 
+                                                                            (vla-ObjectIDToObject (vla-get-Document theTable) 
+                                                                                (vla-GetBlockTableRecordId2 theTable rowIndex columnIndex contentIndex)
+                                                                            )
+                                                                        ) 
+                                                                        (vla-get-Name destinationBlockDefinitionOld) 
+                                                                    )
+                                                                )
+                                                                (progn
+                                                                
+                                                                    (princ 
+                                                                        (strcat
+                                                                            "Found a reference to the block definition " blockName " at "
+                                                                            (vla-get-name container) "/" 
+                                                                            (vla-get-Handle theTable) "(table)" 
+                                                                            "/"
+                                                                            "row" (itoa rowIndex) "," "column" (itoa columnIndex) "," "content" (itoa contentIndex) 
+                                                                            "."
+                                                                            "\n"
+                                                                        )
+                                                                    )
+                                                                    
+                                                                    ;;record the initial state of the cell's content-locked flag, so that we can restore it when we are done (we will be temporarily turning off content lock while we do the work).
+                                                                    (setq initialCellState (vla-GetCellState theTable rowIndex columnIndex))
+                                                                    
+                                                                    ; invoke SetCellState to ensure that the content is not locked.  (If the conent is locked when we try to change the content bleow, an exception is thrown.
+                                                                    (vla-SetCellState theTable rowIndex columnIndex acCellStateNone) 
+                                                                    
+                                                                        
+                                                                    
+                                                                    
+                                                                    ;; deal with attribute values.  Is it possible that we can get away without explicitly dealing with atttribute values? 
+                                                                    ; Curiously, we seemed to be able to get away without thinking about attribute values in the case of an Mleader referring to a block 
+                                                                    ; definition; However, in the case of a table content item referring to a block definition, if we don't do anything about attribute values,
+                                                                    ; then all the attribute values get reset to defaults when we re-point the content item to point to the new block definition.
+                                                                    ;populate initialAttributes, a set of name value pairs.
+                                                                    ; Unfortunately, we cannot use the same procedure that we used in the case of regular block references, because block references in a table cell are not ture blockReference objects and do not have true attributeReference objects.
+                                                                    (setq initialAttributes (list))
+                                                                    (vlax-for e destinationBlockDefinitionOld
+                                                                        (if 
+                                                                            (= (vla-get-ObjectName e) "AcDbAttributeDefinition")
+                                                                            (progn
+                                                                                (setq attributeDefinition e)
+                                                                                (setq initialAttributes
+                                                                                    (append
+                                                                                        initialAttributes
+                                                                                        (list
+                                                                                            (list
+                                                                                                (cons "name" (vla-get-TagString attributeDefinition))
+                                                                                                (cons "value" 
+                                                                                                    (vla-GetBlockAttributeValue2 theTable rowIndex columnIndex contentIndex
+                                                                                                        (vla-get-ObjectID attributeDefinition)
+                                                                                                    )
+                                                                                                )
+                                                                                            )
+                                                                                        )
+                                                                                    )
+                                                                                )
+                                                                            )
+                                                                        )
+                                                                    )
+                                                                    (princ "initialAttributes: ")(princ initialAttributes)(princ "\n")
+                                                                    
+
+                                                                    (vla-SetBlockTableRecordId2 theTable 
+                                                                        rowIndex columnIndex contentIndex
+                                                                        (vla-get-ObjectID destinationBlockDefinitionNew)
+                                                                        (vla-GetAutoScale2 theTable rowIndex columnIndex contentIndex)
+                                                                    )
+                                                                    
+                                                                    ;; re-apply the attribute values
+                                                                    (foreach initialAttribute initialAttributes
+                                                                    
+                                                                        ; find the attributeDefinition within the new blockDefinition that has the proper TagString
+                                                                        (setq attributeDefinition nil)
+                                                                        (vlax-for e destinationBlockDefinitionNew
+                                                                            (if 
+                                                                                (and
+                                                                                    (not attributeDefinition)
+                                                                                    (= (vla-get-ObjectName e) "AcDbAttributeDefinition")
+                                                                                    (= (vla-get-TagString e) (cdr (assoc "name" initialAttribute)))
+                                                                                )
+                                                                                (progn
+                                                                                    (setq attributeDefinition e)
+                                                                                )
+                                                                            )
+                                                                        )
+                                                                        
+                                                                        (if attributeDefinition
+                                                                            (progn
+                                                                                (vla-SetBlockAttributeValue2 theTable rowIndex columnIndex contentIndex
+                                                                                    (vla-get-ObjectID attributeDefinition)
+                                                                                    (cdr (assoc "value" initialAttribute))
+                                                                                )
+                                                                            )
+                                                                        )
+                                                                    )
+                                                                    
+                                                                    ;;restore the original content/formatting locking state, which we might have changed above in order to ensure that the content was unlocked.
+                                                                    (vla-SetCellState theTable rowIndex columnIndex initialCellState) 
+                                                                )
+                                                            )
+                                                            (setq contentIndex (1+ contentIndex))
+                                                        )
+                                                    )
+                                                )
+                                            )
+                                        )
+                                        
+                                    )	
+                                )
+                                
+                                ;;TO DO: handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
+                                ;; unfortunately, this will be difficult because I cannot figure out how to work with the templateTable in the same way as a regular table.
+                                (if nil (progn ;;TO DO 
+                                    
+                                    ;;handle the case of a tableStyle (really, a TableStyle's TableTemplate) referring to the block
+                                    (vlax-for tableStyle (vla-item (vla-get-Dictionaries destinationDatabase) "ACAD_TABLESTYLE")
+                                        
+                                    )
+                                ))
+                            )
+                        )
+                        ; at this point, there will be no references pointing to the old block definition (because we have just re-pointed each
+                        ; of those references), so we may safely delete the old block definition.
+                        (if destinationBlockDefinitionOld 
+                            (progn 
+                                ;(princ " deleting old block definition")
+                                (vla-Delete destinationBlockDefinitionOld)
+                            )
+                        )
+                        (attributeSync destinationBlockDefinitionNew)
+                        (foreach attributeValueToRestore attributeValuesToRestore
+                            (setq attributeReference (car attributeValueToRestore))
+                            (setq goodValue (cdr attributeValueToRestore) )
+                            
+                            (princ "Re-asserting value of attributeReference: ")(princ goodValue)(princ "\n")
+                            (vla-put-TextString attributeReference goodValue)
+                        )
+                        
+                        (princ "\n")
+                    )
+                        
+                )
+            )
+            
+            
+  
+            (vlax-release-object sourceDatabase) ;this is probably not strictly necessary, because garbage collection would handle the closing of the source file even if I did not explicitly release the object.
+		)
 	)
+    (princ "update of external block definitions is finished.\n\n")
 	(princ)
 )
 ;===========
